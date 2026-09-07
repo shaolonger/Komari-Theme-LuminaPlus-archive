@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getRpc2Client, isRpcTransportError } from "@/services/rpc2Client";
+import { getKomariBackendProfile, type KomariBackendKind } from "@/services/backendProfile";
 import { requireRpcCapability } from "@/services/rpcCapabilities";
 import type { PingOverviewResult, RealtimeDelta } from "@/generated/rpcContract";
 import {
@@ -112,6 +113,13 @@ export type ComparisonLoadType =
   | "connections";
 
 export type ComparisonLoadRecords = Record<string, LoadRecordsResponse["records"]>;
+
+export interface RealtimeUpdate {
+  delta: RealtimeDelta;
+  /** The fork offers resumable long-poll deltas; upstream is a snapshot poll. */
+  mode: "delta" | "poll";
+  backend: KomariBackendKind;
+}
 
 export class ApiRequestError extends Error {
   constructor(
@@ -300,7 +308,7 @@ export async function getPublic(): Promise<PublicConfig> {
 
 export async function getNodesLatestStatus(
   uuids?: string[],
-  options?: { timeout?: number },
+  options?: { timeout?: number; signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
   const payload = await rpcCall(
     "common:getNodesLatestStatus",
@@ -316,9 +324,41 @@ export async function getRealtimeDelta(
   uuids: string[],
   options?: { waitMs?: number; timeout?: number; signal?: AbortSignal },
 ): Promise<RealtimeDelta> {
-  await requireRpcCapability("realtime.delta");
+  return (await getRealtimeUpdate(since, uuids, options)).delta;
+}
+
+/**
+ * Return one normalized state update for either supported server family.
+ *
+ * Upstream does not expose the fork's resumable `common:getRealtimeDelta`.
+ * Its latest-status map contains an explicit `online` flag and a retained
+ * latest report for offline nodes, so a synthetic full snapshot preserves the
+ * existing store merge semantics without pretending that a delta exists.
+ */
+export async function getRealtimeUpdate(
+  since: number,
+  uuids: string[],
+  options?: { waitMs?: number; timeout?: number; signal?: AbortSignal },
+): Promise<RealtimeUpdate> {
+  const backend = await getKomariBackendProfile();
   const uniqueUuids = Array.from(new Set(uuids.filter(Boolean)));
-  return await rpcCall(
+  if (backend.kind === "official-v1.4") {
+    const reports = await getNodesLatestStatus(uniqueUuids, {
+      timeout: options?.timeout,
+      signal: options?.signal,
+    });
+    return {
+      backend: backend.kind,
+      mode: "poll",
+      delta: {
+        sequence: Math.max(1, Math.trunc(since) + 1),
+        snapshot: true,
+        reports,
+      },
+    };
+  }
+
+  const delta = await rpcCall(
     "common:getRealtimeDelta",
     {
       since: Math.max(0, Math.trunc(since)),
@@ -330,6 +370,7 @@ export async function getRealtimeDelta(
     RealtimeDeltaSchema,
     { timeout: options?.timeout ?? 30_000, signal: options?.signal, httpOnly: true },
   );
+  return { backend: backend.kind, mode: "delta", delta };
 }
 
 export async function getNodes(): Promise<NodeInfo[]> {

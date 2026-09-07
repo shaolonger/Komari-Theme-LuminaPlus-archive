@@ -15,6 +15,7 @@ import {
   getComparisonPingRecords,
   getLoadRecords,
   getRealtimeDelta,
+  getRealtimeUpdate,
 } from "@/services/api";
 import {
   RpcProtocolError,
@@ -22,12 +23,14 @@ import {
   RpcTransportError,
 } from "@/services/rpc2Client";
 import { resetRpcCapabilityCacheForTests } from "@/services/rpcCapabilities";
+import { resetKomariBackendProfileForTests } from "@/services/backendProfile";
 
 describe("RPC compatibility fallback", () => {
   beforeEach(() => {
     rpcCall.mockReset();
     rpcCallHttp.mockReset();
     resetRpcCapabilityCacheForTests();
+    resetKomariBackendProfileForTests();
     vi.unstubAllGlobals();
   });
 
@@ -50,6 +53,43 @@ describe("RPC compatibility fallback", () => {
     );
     expect(rpcCall).toHaveBeenCalledTimes(1);
     expect(rpcCall).toHaveBeenCalledWith("rpc.discover", {});
+  });
+
+  it("normalizes official current-state polling into a full realtime snapshot", async () => {
+    rpcCall
+      .mockRejectedValueOnce(new RpcResponseError("method not found", -32601))
+      .mockResolvedValueOnce([
+        "common:getNodesLatestStatus",
+        "public:getPublicPingTasks",
+        "public:queryMetrics",
+        "public:getPingMetricStats",
+      ])
+      .mockResolvedValueOnce({
+        "node-a": { online: true, cpu: 9, ram: 128, ram_total: 256 },
+      });
+
+    const result = await getRealtimeUpdate(7, ["node-a", "node-a"], {
+      timeout: 12_000,
+    });
+
+    expect(result).toMatchObject({
+      backend: "official-v1.4",
+      mode: "poll",
+      delta: {
+        sequence: 8,
+        snapshot: true,
+        reports: { "node-a": { online: true, cpu: 9 } },
+      },
+    });
+    expect(rpcCallHttp).not.toHaveBeenCalled();
+    expect(rpcCall).toHaveBeenNthCalledWith(1, "rpc.discover", {});
+    expect(rpcCall).toHaveBeenNthCalledWith(2, "rpc.methods", { internal: true });
+    expect(rpcCall).toHaveBeenNthCalledWith(
+      3,
+      "common:getNodesLatestStatus",
+      { uuids: ["node-a"] },
+      expect.objectContaining({ timeout: 12_000 }),
+    );
   });
 
   it("falls back to legacy HTTP only for a typed transport failure", async () => {

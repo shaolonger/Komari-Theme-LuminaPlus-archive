@@ -1,6 +1,6 @@
 import type { NodeInfo, NodeMetrics, NodeRealtime, TrafficTrendSample } from "@/types/komari";
 import type { RealtimeDelta } from "@/generated/rpcContract";
-import { getNodes, getRealtimeDelta } from "@/services/api";
+import { getNodes, getRealtimeUpdate } from "@/services/api";
 
 type Listener = () => void;
 type RealtimePayload = Record<string, unknown>;
@@ -57,6 +57,10 @@ const NODE_INFO_REFRESH_INTERVAL_MS = 30_000;
 const REALTIME_DELTA_WAIT_MS = 25_000;
 const REALTIME_DELTA_TIMEOUT_MS = 30_000;
 const REALTIME_RETRY_MAX_MS = 30_000;
+// Official Komari exposes a current-state map rather than a resumable
+// long-poll stream. Keep polling bounded and shared at store level; card
+// components never start their own status requests.
+const OFFICIAL_STATUS_POLL_INTERVAL_MS = 15_000;
 const TRAFFIC_TREND_SAMPLE_COUNT = 18;
 const EMPTY_TRAFFIC_TREND_SAMPLE: TrafficTrendSample = {
   value: 0,
@@ -909,17 +913,21 @@ async function runRealtimeDeltaLoop(signal: AbortSignal) {
   while (!signal.aborted) {
     try {
       if (!hydrated) await bootstrap();
-      const delta = await getRealtimeDelta(realtimeSequence, [...state.order], {
+      const update = await getRealtimeUpdate(realtimeSequence, [...state.order], {
         waitMs: REALTIME_DELTA_WAIT_MS,
         timeout: REALTIME_DELTA_TIMEOUT_MS,
         signal,
       });
+      const { delta } = update;
       if (delta.sequence < realtimeSequence && !delta.resync && !delta.snapshot) {
         throw new Error("Realtime delta sequence moved backwards");
       }
       commitRealtimeDelta(delta);
       realtimeSequence = delta.sequence;
       failures = 0;
+      if (update.mode === "poll") {
+        await waitForRealtimeRetry(signal, OFFICIAL_STATUS_POLL_INTERVAL_MS);
+      }
     } catch (error) {
       if (signal.aborted) return;
       commit({ ...state, failureStreak: state.failureStreak + 1 }, { storeStatus: true });
