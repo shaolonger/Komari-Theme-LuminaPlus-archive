@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { getRpc2Client, isRpcTransportError } from "@/services/rpc2Client";
 import { getKomariBackendProfile, type KomariBackendKind } from "@/services/backendProfile";
+import {
+  getOfficialComparisonLoadRecords,
+  getOfficialComparisonPingRecords,
+  getOfficialPingOverviewForNodes,
+  type MetricTimeRange,
+} from "@/services/officialKomariAdapter";
 import { requireRpcCapability } from "@/services/rpcCapabilities";
 import type { PingOverviewResult, RealtimeDelta } from "@/generated/rpcContract";
 import {
@@ -113,6 +119,7 @@ export type ComparisonLoadType =
   | "connections";
 
 export type ComparisonLoadRecords = Record<string, LoadRecordsResponse["records"]>;
+export type ComparisonTimeRange = MetricTimeRange;
 
 export interface RealtimeUpdate {
   delta: RealtimeDelta;
@@ -418,15 +425,31 @@ export async function getComparisonLoadRecords({
   uuids,
   hours = 6,
   loadType,
+  nodes,
+  range,
 }: {
   uuids: string[];
   hours?: number;
   loadType: ComparisonLoadType;
+  /** Current node totals keep percentage charts meaningful for upstream metrics. */
+  nodes?: NodeInfo[];
+  range?: ComparisonTimeRange;
 }): Promise<ComparisonLoadRecords> {
   const uniqueUuids = Array.from(new Set(uuids.filter(Boolean)));
   if (uniqueUuids.length === 0) return {};
 
   const perNodeMaxCount = getComparisonRecordsMaxCount(hours, LOAD_RECORDS_PER_HOUR);
+  const backend = await getKomariBackendProfile();
+  if (backend.kind === "official-v1.4") {
+    return await getOfficialComparisonLoadRecords({
+      uuids: uniqueUuids,
+      hours,
+      loadType,
+      nodes,
+      range,
+      maxPoints: perNodeMaxCount,
+    });
+  }
   try {
     const payload = await rpcCall(
       "common:getRecords",
@@ -435,6 +458,10 @@ export async function getComparisonLoadRecords({
         hours,
         type: "load",
         load_type: loadType,
+        ...(range ? {
+          start: range.start,
+          end: range.end,
+        } : {}),
         maxCount: Math.min(MAX_RPC_RECORDS, perNodeMaxCount * uniqueUuids.length),
       },
       RpcRecordsSchema,
@@ -489,9 +516,11 @@ async function getLegacyPingRecords(uuid: string, hours: number): Promise<PingRe
 export async function getComparisonPingRecords({
   uuids,
   hours = 6,
+  range,
 }: {
   uuids: string[];
   hours?: number;
+  range?: ComparisonTimeRange;
 }): Promise<PingRecordsResponse> {
   const uniqueUuids = Array.from(new Set(uuids.filter(Boolean)));
   if (uniqueUuids.length === 0) {
@@ -499,6 +528,15 @@ export async function getComparisonPingRecords({
   }
 
   const perNodeMaxCount = getComparisonRecordsMaxCount(hours, PING_RECORDS_PER_HOUR);
+  const backend = await getKomariBackendProfile();
+  if (backend.kind === "official-v1.4") {
+    return await getOfficialComparisonPingRecords({
+      uuids: uniqueUuids,
+      hours,
+      range,
+      maxPoints: perNodeMaxCount,
+    });
+  }
   let responses: PingRecordsResponse[];
   try {
     const payload = await rpcCall(
@@ -507,6 +545,10 @@ export async function getComparisonPingRecords({
         uuids: uniqueUuids,
         hours,
         type: "ping",
+        ...(range ? {
+          start: range.start,
+          end: range.end,
+        } : {}),
         maxCount: Math.min(MAX_RPC_RECORDS, perNodeMaxCount * uniqueUuids.length),
       },
       RpcRecordsSchema,
@@ -629,6 +671,10 @@ export async function getPingOverviewForNodes(
   uuids: string[],
   options?: { signal?: AbortSignal },
 ): Promise<PingOverviewResult> {
+  const backend = await getKomariBackendProfile();
+  if (backend.kind === "official-v1.4") {
+    return await getOfficialPingOverviewForNodes(uuids, options);
+  }
   await requireRpcCapability("ping.overview");
   return await rpcCall(
     "common:getPingOverview",

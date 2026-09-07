@@ -179,7 +179,12 @@ export function aggregateHomepagePingOverviewItem(options: {
       (item?.samples ?? []).map((sample) => ({ ...sample, taskId })),
     )
     .sort((left, right) => left.time - right.time || left.taskId - right.taskId)
-    .map(({ time, value }) => ({ time, value }));
+    .map(({ time, value, sampleCount, lossCount }) => ({
+      time,
+      value,
+      sampleCount,
+      lossCount,
+    }));
   const values = taskItems.flatMap(({ item }) => item?.values ?? []);
   const currentLatencies = taskItems
     .map(({ taskId, item }) => ({ taskId, value: item?.lastValue }))

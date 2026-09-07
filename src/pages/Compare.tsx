@@ -1224,6 +1224,11 @@ export function Compare() {
         uuids: selectedNodes.map((node) => node.uuid),
         hours: requestHours,
         loadType: "all",
+        nodes: selectedNodes,
+        range:
+          activeRangeMode === "custom" && customRangeValid
+            ? { start: customStartSeconds, end: customEndSeconds }
+            : undefined,
       });
       const recordsByMetric: Partial<Record<ComparisonMetricKey, Awaited<ReturnType<typeof getComparisonLoadRecords>>>> = {};
       for (const item of selectedMetrics) {
@@ -1242,6 +1247,10 @@ export function Compare() {
       getComparisonPingRecords({
         uuids: selectedNodes.map((node) => node.uuid),
         hours: requestHours,
+        range:
+          activeRangeMode === "custom" && customRangeValid
+            ? { start: customStartSeconds, end: customEndSeconds }
+            : undefined,
       }),
     enabled: canFetch && hasPingMetrics,
     staleTime: 300_000,

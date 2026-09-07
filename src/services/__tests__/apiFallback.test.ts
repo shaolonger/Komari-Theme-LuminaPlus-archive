@@ -16,6 +16,7 @@ import {
   getLoadRecords,
   getRealtimeDelta,
   getRealtimeUpdate,
+  getPingOverviewForNodes,
 } from "@/services/api";
 import {
   RpcProtocolError,
@@ -92,6 +93,86 @@ describe("RPC compatibility fallback", () => {
     );
   });
 
+  it("uses upstream metric batches instead of the fork-only multi-node records extension", async () => {
+    rpcCall.mockImplementation((method: string) => {
+      if (method === "rpc.discover") {
+        return Promise.reject(new RpcResponseError("method not found", -32601));
+      }
+      if (method === "rpc.methods") {
+        return Promise.resolve([
+          "common:getNodesLatestStatus",
+          "public:getPublicPingTasks",
+          "public:queryMetrics",
+          "public:getPingMetricStats",
+        ]);
+      }
+      if (method === "public:queryMetrics") {
+        return Promise.resolve({
+          series: [{
+            metric_key: "cpu.usage",
+            entity_id: "node-a",
+            points: [{ time: "2026-01-01T00:00:00.000Z", value: 12, count: 1 }],
+          }],
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await getComparisonLoadRecords({
+      uuids: ["node-a", "node-b"],
+      hours: 6,
+      loadType: "cpu",
+    });
+
+    const metricCall = rpcCall.mock.calls.find(([method]) => method === "public:queryMetrics");
+    expect(metricCall?.[1]).toMatchObject({
+      entity_ids: ["node-a", "node-b"],
+      metric_keys: ["cpu.usage"],
+    });
+    expect(rpcCall.mock.calls.map(([method]) => method)).not.toContain("common:getRecords");
+    expect(result["node-a"]?.[0]?.cpu).toBe(12);
+    expect(result["node-b"]).toEqual([]);
+  });
+
+  it("routes homepage multi-task ping summaries through upstream public metrics", async () => {
+    rpcCall.mockImplementation((method: string) => {
+      if (method === "rpc.discover") {
+        return Promise.reject(new RpcResponseError("method not found", -32601));
+      }
+      if (method === "rpc.methods") {
+        return Promise.resolve([
+          "common:getNodesLatestStatus",
+          "public:getPublicPingTasks",
+          "public:queryMetrics",
+          "public:getPingMetricStats",
+        ]);
+      }
+      if (method === "public:getPublicPingTasks") {
+        return Promise.resolve([{ id: 8, name: "Edge", clients: ["node-a"], interval: 60 }]);
+      }
+      if (method === "public:queryMetrics") {
+        return Promise.resolve({
+          series: [{
+            metric_key: "ping.latency_ms",
+            entity_id: "node-a",
+            tags: { task_id: "8" },
+            points: [{ time: "2026-01-01T00:00:00.000Z", value: 25, count: 1 }],
+          }],
+        });
+      }
+      if (method === "public:getPingMetricStats") {
+        return Promise.resolve({ stats: [] });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await getPingOverviewForNodes(["node-a"]);
+
+    expect(result.tasks).toEqual([expect.objectContaining({ id: 8, name: "Edge" })]);
+    expect(rpcCall.mock.calls.map(([method]) => method)).not.toContain("common:getPingOverview");
+    expect(result.series["node-a"]?.["8"]?.[0]).toMatchObject({ value: 25 });
+  });
+
   it("falls back to legacy HTTP only for a typed transport failure", async () => {
     rpcCall.mockRejectedValueOnce(new RpcTransportError("offline"));
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -120,13 +201,20 @@ describe("RPC compatibility fallback", () => {
   });
 
   it("queries a comparison client set once for all load metrics", async () => {
-    rpcCall.mockResolvedValueOnce({
-      count: 2,
-      records: {
-        "node-a": [{ client: "node-a", time: 1, cpu: 10 }],
-        "node-b": [{ client: "node-b", time: 2, cpu: 20 }],
-      },
-    });
+    rpcCall
+      .mockResolvedValueOnce({
+        jsonrpc_version: "2.0",
+        contract: "komari.rpc.v2.4",
+        methods: ["common:getRecords"],
+        capabilities: {},
+      })
+      .mockResolvedValueOnce({
+        count: 2,
+        records: {
+          "node-a": [{ client: "node-a", time: 1, cpu: 10 }],
+          "node-b": [{ client: "node-b", time: 2, cpu: 20 }],
+        },
+      });
 
     const result = await getComparisonLoadRecords({
       uuids: ["node-a", "node-b", "node-a"],
@@ -134,8 +222,8 @@ describe("RPC compatibility fallback", () => {
       loadType: "all",
     });
 
-    expect(rpcCall).toHaveBeenCalledTimes(1);
-    expect(rpcCall.mock.calls[0]?.[1]).toMatchObject({
+    expect(rpcCall).toHaveBeenCalledTimes(2);
+    expect(rpcCall.mock.calls[1]?.[1]).toMatchObject({
       uuids: ["node-a", "node-b"],
       type: "load",
       load_type: "all",
@@ -145,19 +233,26 @@ describe("RPC compatibility fallback", () => {
   });
 
   it("queries a comparison client set once for ping history", async () => {
-    rpcCall.mockResolvedValueOnce({
-      count: 2,
-      records: {
-        "node-a": [{ client: "node-a", task_id: 7, time: 1, value: 10 }],
-        "node-b": [{ client: "node-b", task_id: 7, time: 2, value: 20 }],
-      },
-      tasks: [{ id: 7, name: "edge" }],
-    });
+    rpcCall
+      .mockResolvedValueOnce({
+        jsonrpc_version: "2.0",
+        contract: "komari.rpc.v2.4",
+        methods: ["common:getRecords"],
+        capabilities: {},
+      })
+      .mockResolvedValueOnce({
+        count: 2,
+        records: {
+          "node-a": [{ client: "node-a", task_id: 7, time: 1, value: 10 }],
+          "node-b": [{ client: "node-b", task_id: 7, time: 2, value: 20 }],
+        },
+        tasks: [{ id: 7, name: "edge" }],
+      });
 
     const result = await getComparisonPingRecords({ uuids: ["node-a", "node-b"], hours: 6 });
 
-    expect(rpcCall).toHaveBeenCalledTimes(1);
-    expect(rpcCall.mock.calls[0]?.[1]).toMatchObject({
+    expect(rpcCall).toHaveBeenCalledTimes(2);
+    expect(rpcCall.mock.calls[1]?.[1]).toMatchObject({
       uuids: ["node-a", "node-b"],
       type: "ping",
     });

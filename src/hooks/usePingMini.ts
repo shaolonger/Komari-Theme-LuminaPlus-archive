@@ -3,7 +3,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { useVisibleNodeUuids } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { getPingOverviewForNodes } from "@/services/api";
-import type { PingOverviewBucket, PingOverviewItem, PingTask } from "@/types/komari";
+import type {
+  PingOverviewBucket,
+  PingOverviewItem,
+  PingOverviewSample,
+  PingTask,
+} from "@/types/komari";
 import { signalWithTimeout } from "@/utils/abort";
 import {
   aggregateHomepagePingOverviewItem,
@@ -101,13 +106,20 @@ function equalNumberArray(a: number[], b: number[]) {
 }
 
 function equalSamples(
-  a: Array<{ time: number; value: number }>,
-  b: Array<{ time: number; value: number }>,
+  a: PingOverviewSample[],
+  b: PingOverviewSample[],
 ) {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i]?.time !== b[i]?.time || a[i]?.value !== b[i]?.value) return false;
+    if (
+      a[i]?.time !== b[i]?.time ||
+      a[i]?.value !== b[i]?.value ||
+      a[i]?.sampleCount !== b[i]?.sampleCount ||
+      a[i]?.lossCount !== b[i]?.lossCount
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -243,17 +255,16 @@ export async function buildHomepagePingOverviewMap(
       const samples = overviewPoints.flatMap((point) => {
         const timestamp = toPingRecordTimestamp(point.time);
         if (timestamp <= 0) return [];
-        const result: Array<{ time: number; value: number }> = [];
-        if (isValidPingLatency(point.value)) {
-          result.push({ time: timestamp, value: point.value });
-        }
-        if (point.loss_count > 0) {
-          // Keep a loss sentinel next to the bucket's latency point. The
-          // sparkline renders the marker and a visible line break without
-          // discarding the bucket's valid average.
-          result.push({ time: timestamp + 1, value: -1 });
-        }
-        return result;
+        // A rollup may contain both successful probes and packet loss. Keep
+        // them in one weighted sample: the latency bar remains meaningful,
+        // while the quality bar and tooltip retain the exact loss ratio.
+        if (!isValidPingLatency(point.value) && point.loss_count <= 0) return [];
+        return [{
+          time: timestamp,
+          value: isValidPingLatency(point.value) ? point.value : -1,
+          sampleCount: Math.max(1, point.sample_count),
+          lossCount: Math.max(0, Math.min(point.sample_count, point.loss_count)),
+        }];
       });
       const values = overviewPoints.map((point) => point.value).filter(isValidPingLatency);
       const validLatest = stat && isValidPingLatency(stat.latest) ? stat.latest : (values.at(-1) ?? null);
@@ -588,12 +599,16 @@ function pingItemSignature(item: PingOverviewItem) {
           summary.samples?.length ?? 0,
           summary.samples?.at(-1)?.time ?? "",
           summary.samples?.at(-1)?.value ?? "",
+          summary.samples?.at(-1)?.sampleCount ?? "",
+          summary.samples?.at(-1)?.lossCount ?? "",
         ].join(":"),
       )
       .join(";"),
     item.values.length,
     lastSample?.time ?? "",
     lastSample?.value ?? "",
+    lastSample?.sampleCount ?? "",
+    lastSample?.lossCount ?? "",
   ].join(",");
 }
 
@@ -675,53 +690,67 @@ export function usePingMiniMap(uuids: string[]): Map<string, PingOverviewItem> {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+export function buildPingOverviewBuckets(
+  samples: PingOverviewSample[] | undefined,
+  count?: number,
+  now = Date.now(),
+): PingOverviewBucket[] {
+  const totalWindowMs = 60 * 60 * 1000;
+  const resolvedCount = count ?? MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
+  const bucketMs = totalWindowMs / resolvedCount;
+  const windowStart = now - bucketMs * resolvedCount;
+  const totals = new Array<number>(resolvedCount).fill(0);
+  const losts = new Array<number>(resolvedCount).fill(0);
+  const positiveSums = new Array<number>(resolvedCount).fill(0);
+  const positiveCounts = new Array<number>(resolvedCount).fill(0);
+
+  for (const sample of samples ?? []) {
+    if (sample.time < windowStart || sample.time > now) continue;
+
+    let bucketIndex = Math.floor((sample.time - windowStart) / bucketMs);
+    if (bucketIndex < 0) continue;
+    if (bucketIndex >= resolvedCount) bucketIndex = resolvedCount - 1;
+
+    const total = Number.isFinite(sample.sampleCount) && sample.sampleCount != null
+      ? Math.max(1, Math.round(sample.sampleCount))
+      : 1;
+    const lost = Number.isFinite(sample.lossCount) && sample.lossCount != null
+      ? Math.max(0, Math.min(total, Math.round(sample.lossCount)))
+      : isValidPingLatency(sample.value) ? 0 : total;
+    const valid = Math.max(0, total - lost);
+    totals[bucketIndex] += total;
+    losts[bucketIndex] += lost;
+    if (isValidPingLatency(sample.value) && valid > 0) {
+      positiveSums[bucketIndex] += sample.value * valid;
+      positiveCounts[bucketIndex] += valid;
+    }
+  }
+
+  return Array.from({ length: resolvedCount }, (_, index) => {
+    const startAt = windowStart + index * bucketMs;
+    const endAt = startAt + bucketMs;
+    const total = totals[index];
+    const lost = losts[index];
+    const positiveCount = positiveCounts[index];
+
+    return {
+      index,
+      value: positiveCount > 0 ? positiveSums[index] / positiveCount : null,
+      loss: total > 0 ? (lost / total) * 100 : null,
+      total,
+      lost,
+      startAt,
+      endAt,
+    };
+  });
+}
+
 export function usePingMiniBuckets(
   ping: Pick<PingOverviewItem, "samples">,
   count?: number,
 ): PingOverviewBucket[] {
-  return useMemo(() => {
-    const now = Date.now();
-    const totalWindowMs = 60 * 60 * 1000;
-    const resolvedCount = count ?? MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
-    const bucketMs = totalWindowMs / resolvedCount;
-    const windowStart = now - bucketMs * resolvedCount;
-    const totals = new Array<number>(resolvedCount).fill(0);
-    const losts = new Array<number>(resolvedCount).fill(0);
-    const positiveSums = new Array<number>(resolvedCount).fill(0);
-    const positiveCounts = new Array<number>(resolvedCount).fill(0);
-
-    for (const sample of ping.samples ?? []) {
-      if (sample.time < windowStart || sample.time > now) continue;
-
-      let bucketIndex = Math.floor((sample.time - windowStart) / bucketMs);
-      if (bucketIndex < 0) continue;
-      if (bucketIndex >= resolvedCount) bucketIndex = resolvedCount - 1;
-
-      totals[bucketIndex] += 1;
-      if (isValidPingLatency(sample.value)) {
-        positiveSums[bucketIndex] += sample.value;
-        positiveCounts[bucketIndex] += 1;
-      } else {
-        losts[bucketIndex] += 1;
-      }
-    }
-
-    return Array.from({ length: resolvedCount }, (_, index) => {
-      const startAt = windowStart + index * bucketMs;
-      const endAt = startAt + bucketMs;
-      const total = totals[index];
-      const lost = losts[index];
-      const positiveCount = positiveCounts[index];
-
-      return {
-        index,
-        value: positiveCount > 0 ? positiveSums[index] / positiveCount : null,
-        loss: total > 0 ? (lost / total) * 100 : null,
-        total,
-        lost,
-        startAt,
-        endAt,
-      };
-    });
-  }, [count, ping.samples]);
+  return useMemo(
+    () => buildPingOverviewBuckets(ping.samples, count),
+    [count, ping.samples],
+  );
 }

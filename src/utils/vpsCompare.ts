@@ -564,22 +564,40 @@ function buildLoadSeries(
 }
 
 function buildPingPoints(metric: ComparisonMetricDefinition, records: PingRecord[]) {
-  const buckets = new Map<number, { total: number; lost: number; latencySum: number; latencyCount: number }>();
+  const buckets = new Map<number, {
+    total: number;
+    lost: number;
+    weightedLoss: number;
+    latencySum: number;
+    latencyCount: number;
+  }>();
   for (const record of records) {
     const time = toComparisonSeconds(record.time);
     if (time <= 0) continue;
     const bucket = buckets.get(time) ?? {
       total: 0,
       lost: 0,
+      weightedLoss: 0,
       latencySum: 0,
       latencyCount: 0,
     };
-    bucket.total += 1;
-    if (isLostPingSample(record.value)) {
-      bucket.lost += 1;
-    } else if (isValidPingLatency(record.value)) {
-      bucket.latencySum += record.value;
-      bucket.latencyCount += 1;
+    const total = Number.isFinite(record.sample_count) && record.sample_count != null
+      ? Math.max(1, Math.round(record.sample_count))
+      : 1;
+    const explicitLossCount = Number.isFinite(record.loss_count) && record.loss_count != null
+      ? Math.max(0, Math.min(total, Math.round(record.loss_count)))
+      : null;
+    const lost = explicitLossCount ?? (isLostPingSample(record.value) ? total : 0);
+    const lossRate = Number.isFinite(record.loss_rate) && record.loss_rate != null
+      ? Math.max(0, Math.min(1, record.loss_rate))
+      : lost / total;
+    const valid = Math.max(0, total - lost);
+    bucket.total += total;
+    bucket.lost += lost;
+    bucket.weightedLoss += lossRate * total;
+    if (isValidPingLatency(record.value) && valid > 0) {
+      bucket.latencySum += record.value * valid;
+      bucket.latencyCount += valid;
     }
     buckets.set(time, bucket);
   }
@@ -588,7 +606,7 @@ function buildPingPoints(metric: ComparisonMetricDefinition, records: PingRecord
     .map(([time, bucket]) => {
       const value =
         metric.key === "ping_loss"
-          ? (bucket.lost / Math.max(1, bucket.total)) * 100
+          ? (bucket.weightedLoss / Math.max(1, bucket.total)) * 100
           : bucket.latencyCount > 0
             ? bucket.latencySum / bucket.latencyCount
             : null;

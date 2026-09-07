@@ -313,6 +313,7 @@ export function Fleet3D() {
         uuids: visibleUuids,
         hours: timelineHours,
         loadType: "cpu",
+        nodes: allNodes,
       }),
     enabled: timelineEnabled && visibleUuids.length > 0,
     staleTime: 300_000,

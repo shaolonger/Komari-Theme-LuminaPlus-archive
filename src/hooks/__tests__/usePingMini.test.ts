@@ -4,7 +4,7 @@ vi.mock("@/services/api", () => ({
 	getPingOverviewForNodes: vi.fn(),
 }));
 
-import { buildHomepagePingOverviewMap } from "@/hooks/usePingMini";
+import { buildHomepagePingOverviewMap, buildPingOverviewBuckets } from "@/hooks/usePingMini";
 import { getPingOverviewForNodes } from "@/services/api";
 
 const mockedGetPingOverview = vi.mocked(getPingOverviewForNodes);
@@ -70,11 +70,27 @@ describe("buildHomepagePingOverviewMap", () => {
 	  taskSummaries: [expect.objectContaining({ name: "Cloudflare" })],
 	  values: [35, 50, 42],
 	});
-	expect(result.items.get("node-a")?.samples).toEqual([
-	  { time: 1_700_000_000_000, value: 35 },
-	  { time: 1_700_000_050_000, value: 50 },
-	  { time: 1_700_000_050_001, value: -1 },
-	  { time: 1_700_000_100_000, value: 42 },
-	]);
+		expect(result.items.get("node-a")?.samples).toEqual([
+		  { time: 1_700_000_000_000, value: 35, sampleCount: 3, lossCount: 0 },
+		  { time: 1_700_000_050_000, value: 50, sampleCount: 3, lossCount: 1 },
+		  { time: 1_700_000_100_000, value: 42, sampleCount: 3, lossCount: 0 },
+		]);
+  });
+
+  it("keeps a rollup's latency and packet-loss weights in the same visual bucket", () => {
+    const now = 1_700_000_000_000;
+    const [bucket] = buildPingOverviewBuckets([{
+      time: now - 1_000,
+      value: 48,
+      sampleCount: 5,
+      lossCount: 1,
+    }], 1, now);
+
+    expect(bucket).toMatchObject({
+      value: 48,
+      total: 5,
+      lost: 1,
+      loss: 20,
+    });
   });
 });

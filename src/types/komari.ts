@@ -334,6 +334,12 @@ export const PingRecordSchema = z
     time: z.union([z.string(), z.number()]),
     value: z.number(),
     client: z.string().default(""),
+    // Metric rollups can represent many probe results in one point.  Keep the
+    // weights so comparison charts do not turn a 20% loss bucket into 0% or
+    // 100% merely because it is rendered as one normalized record.
+    sample_count: z.number().finite().positive().optional(),
+    loss_count: z.number().finite().nonnegative().optional(),
+    loss_rate: z.number().finite().min(0).max(1).optional(),
   })
   .passthrough();
 
@@ -342,6 +348,9 @@ export interface PingRecord {
   time: string | number;
   value: number;
   client: string;
+  sample_count?: number;
+  loss_count?: number;
+  loss_rate?: number;
 }
 
 export const PingTaskSchema = z
@@ -403,7 +412,16 @@ export interface PingOverviewTaskSummary {
   loss: number | null;
   sampleCount: number;
   hasSamples: boolean;
-  samples?: Array<{ time: number; value: number }>;
+  samples?: PingOverviewSample[];
+}
+
+export interface PingOverviewSample {
+  time: number;
+  value: number;
+  /** Number of probe attempts represented by a downsampled point. */
+  sampleCount?: number;
+  /** Number of lost attempts in the same downsampled point. */
+  lossCount?: number;
 }
 
 export interface PingOverviewItem {
@@ -411,7 +429,7 @@ export interface PingOverviewItem {
   isAssigned: boolean;
   lastValue: number | null;
   values: number[];
-  samples: Array<{ time: number; value: number }>;
+  samples: PingOverviewSample[];
   max: number;
   loss: number | null;
   taskIds?: number[];
