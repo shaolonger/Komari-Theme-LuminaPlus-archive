@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   ensureStarted,
   getAllNodeMetaSnapshot,
@@ -18,6 +18,8 @@ import {
   type HomeNodeSummary,
 } from "@/services/wsStore";
 import type { NodeInfo, NodeMetrics, TrafficTrendSample } from "@/types/komari";
+import { useThemeSettings } from "@/hooks/useThemeSettings";
+import { overlayConfiguredNodeMeta } from "@/utils/nodeMetaOverlay";
 
 const EMPTY_TRAFFIC_TREND_SNAPSHOT: { up: TrafficTrendSample[]; down: TrafficTrendSample[] } = {
   up: [],
@@ -42,7 +44,12 @@ export function useNodeMeta(uuid: string, enabled = true): NodeInfo | undefined 
     () => (enabled ? getNodeMetaSnapshot(uuid) : undefined),
     [uuid, enabled],
   );
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const meta = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const { homeNodeFacets } = useThemeSettings();
+  return useMemo(
+    () => (meta ? overlayConfiguredNodeMeta(meta, homeNodeFacets) : undefined),
+    [homeNodeFacets, meta],
+  );
 }
 
 export function useNodeMetrics(uuid: string, enabled = true): NodeMetrics | undefined {
@@ -91,10 +98,15 @@ export function useVisibleNodeUuids(includeHidden = false): string[] {
 
 export function useAllNodeMeta(): NodeInfo[] {
   useEnsured();
-  return useSyncExternalStore(
+  const nodes = useSyncExternalStore(
     subscribeAllNodes,
     getAllNodeMetaSnapshot,
     getAllNodeMetaSnapshot,
+  );
+  const { homeNodeFacets } = useThemeSettings();
+  return useMemo(
+    () => nodes.map((node) => overlayConfiguredNodeMeta(node, homeNodeFacets)),
+    [homeNodeFacets, nodes],
   );
 }
 

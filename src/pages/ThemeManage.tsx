@@ -1775,7 +1775,7 @@ export function ThemeManage() {
 	                  VPS 多维标签
 	                </div>
 	                <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-	                  每个输入框可写多个值，用分号、逗号或换行分隔；后端已有字段会作为默认标签参与首页筛选。
+	                  每个输入框可写多个值，用分号、逗号或换行分隔；后端已有字段会作为默认标签参与首页筛选。官方 Komari 未提供厂商、用途字段时，这里的首个值也会补全到列表和详情页。
 	                </div>
 	              </div>
 	              <label className="surface-inset flex min-w-[220px] items-center gap-2 px-3 py-2">

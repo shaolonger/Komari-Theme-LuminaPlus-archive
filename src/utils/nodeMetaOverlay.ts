@@ -1,4 +1,40 @@
 import type { AdminClient, NodeInfo } from "@/types/komari";
+import {
+  HOME_FACET_PROVIDER,
+  HOME_FACET_PURPOSE,
+  type HomeNodeFacets,
+} from "@/utils/homeVpsViews";
+
+function firstConfiguredFacet(
+  facets: HomeNodeFacets,
+  uuid: string,
+  dimensionId: string,
+) {
+  return facets[uuid]?.[dimensionId]?.find((value) => value.trim())?.trim() ?? "";
+}
+
+/**
+ * The official server deliberately has no provider/business-role columns.
+ * Reuse the theme's existing per-node facet data as a non-destructive metadata
+ * overlay so list sort, cards and instance pages agree with home filtering.
+ */
+export function overlayConfiguredNodeMeta(
+  meta: NodeInfo,
+  configuredFacets: HomeNodeFacets | undefined,
+): NodeInfo {
+  if (!configuredFacets) return meta;
+  const provider = firstConfiguredFacet(configuredFacets, meta.uuid, HOME_FACET_PROVIDER);
+  const businessRole = firstConfiguredFacet(configuredFacets, meta.uuid, HOME_FACET_PURPOSE);
+  if (!provider && !businessRole) return meta;
+
+  return {
+    ...meta,
+    // A backend-native value is authoritative. Facets fill only fields that
+    // upstream does not model, preserving the legacy fork's current behavior.
+    provider: meta.provider?.trim() || provider,
+    business_role: meta.business_role?.trim() || businessRole,
+  };
+}
 
 export function overlayAdminClientMeta(
   meta: NodeInfo,

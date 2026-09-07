@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AdminClient, NodeInfo } from "@/types/komari";
 import {
   overlayAdminClientMeta,
+  overlayConfiguredNodeMeta,
   shouldIncludeAgentVersionCompleteness,
 } from "@/utils/nodeMetaOverlay";
 
@@ -72,6 +73,28 @@ describe("overlayAdminClientMeta", () => {
     expect(enriched.version).toBe("v1.2.6");
     expect(enriched.ipv4).toBe("203.0.113.10");
     expect(enriched.capability_ping).toBe(true);
+  });
+});
+
+describe("overlayConfiguredNodeMeta", () => {
+  it("uses configured provider and purpose facets only when upstream fields are absent", () => {
+    const configured = overlayConfiguredNodeMeta(meta({ provider: "", business_role: "" }), {
+      "node-a": {
+        provider: ["DMIT"],
+        purpose: ["落地"],
+      },
+    });
+    expect(configured.provider).toBe("DMIT");
+    expect(configured.business_role).toBe("落地");
+
+    const native = overlayConfiguredNodeMeta(meta({ provider: "Native", business_role: "原生" }), {
+      "node-a": {
+        provider: ["DMIT"],
+        purpose: ["落地"],
+      },
+    });
+    expect(native.provider).toBe("Native");
+    expect(native.business_role).toBe("原生");
   });
 });
 
