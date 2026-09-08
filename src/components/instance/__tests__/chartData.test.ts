@@ -2,12 +2,28 @@ import { describe, expect, it } from "vitest";
 import {
   cutPeakValues,
   downsampleAligned,
+  downsamplePingAligned,
   fillMissingMetricPoints,
   insertMetricGapSentinels,
   type TimedMetricPoint,
 } from "@/components/instance/chartData";
 
 describe("fillMissingMetricPoints", () => {
+  it("does not erase every day-scale bucket when losses are distributed throughout the day", () => {
+    const times = Array.from({ length: 2880 }, (_, index) => index * 30);
+    const values = times.map((_, index) => index % 12 === 0 ? null : 50);
+    const reduced = downsamplePingAligned(times, [values], 160);
+    expect(reduced.perTask[0].filter((v) => v === 50).length).toBeGreaterThan(160);
+    expect(reduced.perTask[0].filter((v) => v === null)).toHaveLength(240);
+  });
+  it("keeps a day of rolled-up Ping points visible and preserves real loss", () => {
+    const points = Array.from({ length: 288 }, (_, index) => ({ time: index * 300, ping: index === 100 ? null : 40 + index % 10 }));
+    const result = insertMetricGapSentinels(points, { intervals: new Map([["ping", 30]]), inferSamplingInterval: true });
+    expect(result).toEqual(points);
+    const chart = downsampleAligned(result.map((point) => point.time), [result.map((point) => point.ping)], 160);
+    expect(chart.perTask[0].filter((value) => typeof value === "number").length).toBeGreaterThan(150);
+    expect(chart.perTask[0]).toContain(null);
+  });
   it("keeps the newest sample's own timestamp instead of snapping it to the grid", () => {
     // 末点 (t=35) 不在 10ms 网格上；不能被拉回到 t=30。
     const points: TimedMetricPoint[] = [

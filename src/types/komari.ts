@@ -161,6 +161,7 @@ export interface ThemeSettings {
   enableAdminButton?: boolean;
   showPingChart?: boolean;
   homepagePingBindings?: Record<string, string[]>;
+  homepagePingTaskOrder?: Record<string, number[]>;
   homepagePingAggregationStrategy?: "worst" | "primary" | "average";
   homepagePingPrimaryTasks?: Record<string, number>;
   homepagePingTaskGroups?: Record<string, string>;

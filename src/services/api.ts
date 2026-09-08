@@ -520,7 +520,9 @@ export async function getComparisonLoadRecords({
 export async function getPingRecords(
   uuid: string,
   hours = 6,
+  range?: ComparisonTimeRange,
 ): Promise<PingRecordsResponse> {
+  if (range) return getComparisonPingRecords({ uuids: [uuid], hours, range });
   let backend: Awaited<ReturnType<typeof getBackendProfile>> | undefined;
   try {
     backend = await getBackendProfile();

@@ -101,6 +101,7 @@ function sourceTitle(row: {
 export function buildHomepagePingSourceRows(
   ping: Pick<PingOverviewItem, "taskSummaries">,
   taskGroups: HomepagePingTaskGroups = {},
+  taskOrder: number[] = [],
 ): HomepagePingSourceRow[] {
   return (ping.taskSummaries ?? [])
     .map((summary, index) => {
@@ -137,8 +138,10 @@ export function buildHomepagePingSourceRows(
       return { row, sourceIndex: index };
     })
     .sort((left, right) => {
-      const byAttention = right.row.attentionScore - left.row.attentionScore;
-      if (byAttention !== 0) return byAttention;
+      const leftIndex = taskOrder.indexOf(left.row.taskId);
+      const rightIndex = taskOrder.indexOf(right.row.taskId);
+      const byOrder = (leftIndex < 0 ? taskOrder.length : leftIndex) - (rightIndex < 0 ? taskOrder.length : rightIndex);
+      if (byOrder !== 0) return byOrder;
       return left.sourceIndex - right.sourceIndex;
     })
     .map(({ row }) => row);

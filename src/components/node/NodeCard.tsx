@@ -82,6 +82,7 @@ export const NodeCard = memo(function NodeCard({
   const sourceRows = buildHomepagePingSourceRows(
     ping,
     themeSettings.homepagePingTaskGroups,
+    themeSettings.homepagePingTaskOrder[node.uuid],
   );
   const cardStatus =
     isOffline || sourceRows.some((row) => row.status === "critical")

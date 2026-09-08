@@ -505,8 +505,8 @@ export function FacetRail({
   onSelectValue: (value: string) => void;
 }) {
   const orderedOptions = useMemo(
-    () => Array.from(new Set([...selectedValues, ...options])),
-    [options, selectedValues],
+    () => Array.from(new Set(options)),
+    [options],
   );
   const [quickOptionCount, setQuickOptionCount] = useState(orderedOptions.length);
   const railRef = useRef<HTMLElement>(null);

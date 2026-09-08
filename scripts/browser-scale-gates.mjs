@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { spawn } from "node:child_process";
@@ -69,6 +69,7 @@ let activeFixture = {
 };
 const requestCounts = new Map();
 const requestPayloads = new Map();
+let savedUiSettings = null;
 
 function count(label, run = activeFixture.run) {
   const counts = requestCounts.get(run) ?? {};
@@ -277,6 +278,8 @@ const server = createServer(async (request, response) => {
         showGroupTabs: false,
         desktopNodeViewMode: "compact",
         homepagePingBindings: { "1": nodeList(fixture.nodes).map((node) => node.uuid) },
+        ...(fixture.ui ? { showGroupTabs: true, showPingChart: true } : {}),
+        ...(fixture.ui ? savedUiSettings : {}),
       },
     };
     return isOfficialFixture(fixture)
@@ -285,7 +288,15 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/api/me") {
     count("me", fixture.run);
-    return sendJson(response, { logged_in: false, username: "", uuid: "" });
+    return sendJson(response, { logged_in: Boolean(fixture.ui), username: "test", uuid: "test" });
+  }
+  if (fixture.ui && url.pathname === "/api/admin/client/list") return sendJson(response, nodeList(fixture.nodes));
+  if (fixture.ui && url.pathname === "/api/admin/ping") return sendJson(response, Array.from({ length: 6 }, (_, index) => ({ id: index + 1, name: `Task ${index + 1}`, type: "icmp", interval: 60, clients: nodeList(fixture.nodes).map((node) => node.uuid) })));
+  if (fixture.ui && url.pathname === "/api/admin/theme/settings") {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    savedUiSettings = JSON.parse(Buffer.concat(chunks).toString());
+    return sendJson(response, { status: "success" });
   }
   if (url.pathname === "/api/rpc2" && request.method === "POST") {
     const chunks = [];
@@ -315,6 +326,7 @@ const server = createServer(async (request, response) => {
         return sendRpcResult(response, payload.id, reports);
       }
       if (payload.method === "public:getPublicPingTasks") {
+        if (fixture.ui) return sendRpcResult(response, payload.id, Array.from({ length: 6 }, (_, index) => ({ id: index + 1, name: `Task ${index + 1}`, weight: index, clients: nodeList(fixture.nodes).map((node) => node.uuid), default_on: true, type: "icmp", interval: 60 })));
         return sendRpcResult(response, payload.id, [{
           id: 1,
           weight: 1,
@@ -695,6 +707,61 @@ try {
   assertLegacyRequestProfile(soakRun, 30);
   results.push({ backend: BACKEND_PROFILES.legacy.id, soakTicks: SOAK_TICK_TARGET, heapBefore: heapBefore.usedSize, heapAfter: heapAfter.usedSize, heapGrowth });
 
+  await clearFixturePage(cdp);
+  activeFixture = { backend: BACKEND_PROFILES.official.id, nodes: 3, soak: false, run: "ui-regressions", ui: true };
+  await cdp.call("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/instance/node-0` });
+  await waitUntil(cdp, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Ping')`, 6_000);
+  await cdp.value(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Ping').click()`);
+  await waitUntil(cdp, `document.querySelector('.instance-ping-task') !== null`, 6_000);
+  for (const label of ["6 小时", "1 天", "自定义"]) {
+    await cdp.value(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === ${JSON.stringify(label)}).click()`);
+    await waitUntil(cdp, `document.querySelector('.instance-chart-view:not([hidden]) .uplot canvas') !== null`, 6_000);
+    if (label === "1 天" && process.env.BROWSER_GATE_SCREENSHOT) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      const screenshot = await cdp.call("Page.captureScreenshot", { format: "png" });
+      writeFileSync(`${process.env.BROWSER_GATE_SCREENSHOT}.ping.png`, Buffer.from(screenshot.data, "base64"));
+    }
+  }
+  await waitUntil(cdp, `document.querySelectorAll('input[type="datetime-local"]').length === 2`, 2_000);
+  await cdp.value(`(() => {
+    const inputs = document.querySelectorAll('input[type="datetime-local"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(inputs[0], '2026-08-01T18:00'); inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+    setter.call(inputs[1], '2026-08-02T00:00'); inputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await cdp.value(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '应用时间范围').click()`);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  failGate(rpcRequests("ui-regressions", "public:queryMetrics").some(({ params }) => params.start === "2026-08-01T10:00:00.000Z" && params.end === "2026-08-01T16:00:00.000Z"), "custom Ping range was not sent in Beijing time");
+  await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/?view=theme-manage` });
+  await waitUntil(cdp, `document.querySelector('input[aria-label="搜索要配置的 VPS"]') !== null`, 6_000);
+  await cdp.value(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '选择当前结果').click()`);
+  await waitUntil(cdp, `document.body.innerText.includes('批量配置 3 台 VPS')`, 2_000);
+  await cdp.value(`(() => { const title = Array.from(document.querySelectorAll('strong')).find(e => e.textContent === '批量配置 3 台 VPS'); title.parentElement.querySelectorAll('input[type="checkbox"]').forEach(e => e.click()); })()`);
+  await cdp.value(`document.querySelector('button[aria-label="上移 Task 6"]').click()`);
+  await cdp.value(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '替换所选 VPS 的任务').click()`);
+  await cdp.value(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '保存设置').click()`);
+  await waitUntil(cdp, `document.body.innerText.includes('保存成功') || document.body.innerText.includes('已保存')`, 6_000);
+  failGate(Object.values(savedUiSettings?.homepagePingTaskOrder ?? {}).filter(ids => ids.length === 6).length === 3, "batch VPS task configuration was not saved");
+  failGate(savedUiSettings.homepagePingTaskOrder["node-0"].join() === "1,2,3,4,6,5", "configured order was lost on save");
+  await cdp.call("Page.reload");
+  await waitUntil(cdp, `document.querySelector('input[aria-label="搜索要配置的 VPS"]') !== null && document.body.innerText.includes('Task 4 → Task 6 → Task 5')`, 6_000);
+  if (process.env.BROWSER_GATE_SCREENSHOT) {
+    await cdp.value(`document.querySelector('input[aria-label="搜索要配置的 VPS"]').scrollIntoView({ block: 'start' })`);
+    const screenshot = await cdp.call("Page.captureScreenshot", { format: "png" });
+    writeFileSync(`${process.env.BROWSER_GATE_SCREENSHOT}.editor.png`, Buffer.from(screenshot.data, "base64"));
+  }
+  await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/` });
+  await waitUntil(cdp, `document.querySelectorAll('.ping-task-lane').length === 18`, 6_000);
+  failGate(await cdp.value(`Array.from(document.querySelectorAll('.home-node-card-slot')[0].querySelectorAll('.ping-task-lane-name')).map(e => e.textContent).join() === 'Task 1,Task 2,Task 3,Task 4,Task 6,Task 5'`), "card did not preserve all six configured tasks in order");
+  const facetBefore = await cdp.value(`Array.from(document.querySelectorAll('.home-facet-rail button')).map(e => e.textContent)`);
+  await cdp.value(`Array.from(document.querySelectorAll('.home-facet-rail button')).find(e => e.textContent.includes('Group 2')).click()`);
+  failGate(JSON.stringify(await cdp.value(`Array.from(document.querySelectorAll('.home-facet-rail button')).map(e => e.textContent)`)) === JSON.stringify(facetBefore), "selected facet moved from its position");
+  if (process.env.BROWSER_GATE_SCREENSHOT) {
+    const screenshot = await cdp.call("Page.captureScreenshot", { format: "png" });
+    writeFileSync(process.env.BROWSER_GATE_SCREENSHOT, Buffer.from(screenshot.data, "base64"));
+  }
+  results.push({ uiRegressions: "Ping presets, Beijing custom range, VPS batch save/reload, six-task order, stable facets" });
   console.log(JSON.stringify(results, null, 2));
 } finally {
   cdp?.close();

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getLoadRecords, getPingRecords } from "@/services/api";
 import type { NodeInfo } from "@/types/komari";
+import type { PingTimeRange } from "@/utils/pingTimeRange";
 
 export function useLoadRecords(
   uuid: string,
@@ -31,10 +32,10 @@ export function useLoadRecords(
   });
 }
 
-export function usePingRecords(uuid: string, hours = 6, enabled = true) {
+export function usePingRecords(uuid: string, hours = 6, enabled = true, range?: PingTimeRange) {
   return useQuery({
-    queryKey: ["records", "ping", uuid, hours],
-    queryFn: () => getPingRecords(uuid, hours),
+    queryKey: ["records", "ping", uuid, hours, range?.start, range?.end],
+    queryFn: () => getPingRecords(uuid, hours, range),
     staleTime: 300_000,
     // 关掉后台自动重拉（聚焦/切标签页的 refetch 会让 uplot-react 重建图表、偶发闪空白）；有手动刷新兜底。
     refetchOnWindowFocus: false,

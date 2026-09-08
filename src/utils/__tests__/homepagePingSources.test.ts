@@ -31,6 +31,7 @@ describe("homepage Ping source helpers", () => {
         ],
       },
       { 5: "海外" },
+      [5, 2],
     );
 
     expect(rows).toEqual([
@@ -103,7 +104,7 @@ describe("homepage Ping source helpers", () => {
     );
   });
 
-  it("sorts critical, warning, empty, and healthy sources by attention", () => {
+  it("keeps configured source order regardless of changing risk", () => {
     const rows = buildHomepagePingSourceRows({
       taskSummaries: [
         {
@@ -145,9 +146,9 @@ describe("homepage Ping source helpers", () => {
       ],
     });
 
-    expect(rows.map((row) => row.taskId)).toEqual([4, 3, 2, 1]);
-    expect(rows.map((row) => row.status)).toEqual(["critical", "warning", "empty", "ok"]);
-    expect(rows[0].title).toContain("严重");
+    expect(rows.map((row) => row.taskId)).toEqual([1, 2, 3, 4]);
+    expect(rows.map((row) => row.status)).toEqual(["ok", "empty", "warning", "critical"]);
+    expect(rows[3].title).toContain("严重");
   });
 
   it("maps packet loss to discrete dot levels", () => {

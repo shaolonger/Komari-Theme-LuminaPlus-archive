@@ -154,6 +154,7 @@ export function insertMetricGapSentinels(
     intervals?: Map<string, number>;
     defaultInterval?: number;
     matchToleranceRatio?: number;
+    inferSamplingInterval?: boolean;
   },
 ) {
   const normalized = normalizePoints(points, true);
@@ -176,10 +177,16 @@ export function insertMetricGapSentinels(
     if (validTimes.length < 2) continue;
 
     const configuredInterval = intervals.get(key);
-    const interval =
+    let interval =
       typeof configuredInterval === "number" && configuredInterval > 0
         ? configuredInterval
         : detectTypicalIntervalSeconds(validTimes, defaultInterval);
+    if (options?.inferSamplingInterval) {
+      // Historical responses can be rolled up to a coarser cadence than the
+      // live task interval. Include explicit loss samples in this estimate.
+      const sampledTimes = sortedPoints.filter((point) => point[key] !== undefined).map((point) => point.time);
+      interval = Math.max(interval, detectTypicalIntervalSeconds(sampledTimes, interval));
+    }
     if (!Number.isFinite(interval) || interval <= 0) continue;
 
     const tolerance = Math.max(1, interval * toleranceRatio);
@@ -366,6 +373,47 @@ export function cutPeakValues<T extends { [key: string]: any }>(
 
 // 按时间等宽分桶降采样，桶内对每条探测点的样本取均值：降到 uPlot 抽稀阈值以下避免尖刺。
 // 三态保留：任何 null→null（断点优先，避免丢包被均值吞掉），有值→均值，全 off-phase→undefined。
+/** Reduce each uninterrupted Ping segment separately: a loss in a coarse
+ * bucket must not erase all the successful probes in that bucket. */
+export function downsamplePingAligned(
+  times: number[],
+  perTask: Array<Array<number | null | undefined>>,
+  maxPoints: number,
+) {
+  if (times.length <= maxPoints) return { times, perTask };
+  const aligned = new Map<number, Array<number | null | undefined>>();
+  const put = (time: number, task: number, value: number | null) => {
+    const row = aligned.get(time) ?? new Array(perTask.length).fill(undefined);
+    row[task] = value;
+    aligned.set(time, row);
+  };
+  perTask.forEach((values, task) => {
+    let segmentTimes: number[] = [];
+    let segmentValues: number[] = [];
+    const flush = () => {
+      const budget = Math.max(2, Math.ceil(maxPoints * segmentTimes.length / times.length));
+      const reduced = downsampleAligned(segmentTimes, [segmentValues], budget);
+      reduced.times.forEach((time, index) => put(time, task, reduced.perTask[0][index] as number));
+      segmentTimes = []; segmentValues = [];
+    };
+    let inGap = false;
+    values.forEach((value, index) => {
+      if (value === undefined) return;
+      if (value === null) {
+        flush();
+        if (!inGap) put(times[index], task, null);
+        inGap = true;
+      } else if (Number.isFinite(value)) {
+        inGap = false;
+        segmentTimes.push(times[index]); segmentValues.push(value);
+      }
+    });
+    flush();
+  });
+  const outputTimes = [...aligned.keys()].sort((a, b) => a - b);
+  return { times: outputTimes, perTask: perTask.map((_, task) => outputTimes.map((time) => aligned.get(time)![task])) };
+}
+
 export function downsampleAligned(
   times: number[],
   perTask: Array<Array<number | null | undefined>>,

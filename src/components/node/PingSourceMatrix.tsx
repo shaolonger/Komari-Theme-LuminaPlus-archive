@@ -8,8 +8,6 @@ import { latencyHeatColor } from "@/utils/metricTone";
 import { buildPingSparklineGeometry } from "@/utils/pingSparkline";
 import { buildPingTaskVpsCompareUrl } from "@/utils/pingCompareLink";
 
-const REGULAR_SOURCE_LIMIT = 4;
-const COMPACT_SOURCE_LIMIT = 4;
 const SPARKLINE_WIDTH = 100;
 const SPARKLINE_HEIGHT = 22;
 
@@ -157,11 +155,7 @@ export function PingSourceMatrix({
 }) {
   if (rows.length === 0) return null;
 
-  const limit = density === "compact" ? COMPACT_SOURCE_LIMIT : REGULAR_SOURCE_LIMIT;
-  const hasOverflow = rows.length > limit;
-  const sourceLimit = hasOverflow ? limit - 1 : limit;
-  const visibleRows = rows.slice(0, sourceLimit);
-  const overflowCount = rows.length - visibleRows.length;
+  const visibleRows = rows;
   const latencyValues = rows
     .map((row) => row.latencyMs)
     .filter((value): value is number => value != null);
@@ -206,16 +200,6 @@ export function PingSourceMatrix({
             <PingTaskTile key={source.taskId} source={source} density={density} />
           )
         ))}
-        {hasOverflow && (
-          <Link
-            to={compareUrl}
-            className={compact ? "ping-task-lane ping-task-lane-overflow" : "ping-task-overflow"}
-            title={`查看其余 ${overflowCount} 个监测任务`}
-          >
-            <strong>+{overflowCount}</strong>
-            <span>{density === "regular" ? "个任务" : "更多"}</span>
-          </Link>
-        )}
       </div>
     </section>
   );

@@ -1,4 +1,13 @@
 export type HomepagePingTaskBindings = Record<string, string[]>;
+export type HomepagePingTaskOrder = Record<string, number[]>;
+
+export function normalizeHomepagePingTaskOrder(value: unknown, bindings: HomepagePingTaskBindings): HomepagePingTaskOrder {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return Object.fromEntries([...getHomepagePingTaskIdsByClient(bindings)].map(([uuid, ids]) => {
+    const configured = Array.isArray(source[uuid]) ? source[uuid].map(Number) : [];
+    return [uuid, [...new Set([...configured.filter((id) => ids.includes(id)), ...ids])]];
+  }));
+}
 
 export function normalizeHomepagePingTaskBindings(
   value: unknown,

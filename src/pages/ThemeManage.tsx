@@ -3,7 +3,6 @@ import { Link, Navigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
-  BarChart3,
   ChevronDown,
   ChevronUp,
   CircleDollarSign,
@@ -27,7 +26,6 @@ import {
 import { clsx } from "clsx";
 import { InstancePanel } from "@/components/instance/InstancePanel";
 import { Spinner } from "@/components/ui/Spinner";
-import { Flag } from "@/components/ui/Flag";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { queryClient } from "@/services/queryClient";
 import {
@@ -85,12 +83,13 @@ import {
   countHomepagePingBindingPairs,
   countHomepagePingBoundClients,
   filterHomepagePingTaskBindings,
-  getHomepagePingTaskIdsByClient,
+  normalizeHomepagePingTaskOrder,
+  type HomepagePingTaskOrder,
   normalizeHomepagePingTaskBindings,
   type HomepagePingTaskBindings,
 } from "@/utils/pingTasks";
+import { HomepagePingEditor } from "@/components/instance/HomepagePingEditor";
 import { buildPingDiagnostics } from "@/utils/pingDiagnostics";
-import { buildPingTaskVpsCompareUrl } from "@/utils/pingCompareLink";
 import {
   DEFAULT_THEME_SETTINGS,
   normalizeThemeSettings,
@@ -285,16 +284,6 @@ function sortClients(clients: AdminClient[]) {
   });
 }
 
-function summarizeNodes(
-  uuids: string[],
-  clientsById: Map<string, AdminClient>,
-) {
-  if (uuids.length === 0) return "未绑定节点";
-  const names = uuids.map((uuid) => clientsById.get(uuid)?.name || uuid);
-  const summary = names.join("、");
-  return summary.length > 92 ? `${summary.slice(0, 92)}...` : summary;
-}
-
 function pruneBindings(bindings: HomepagePingTaskBindings) {
   const normalized = normalizeHomepagePingTaskBindings(bindings);
   const pruned: HomepagePingTaskBindings = {};
@@ -306,50 +295,6 @@ function pruneBindings(bindings: HomepagePingTaskBindings) {
   }
 
   return pruned;
-}
-
-function applyClientAssignment(
-  bindings: HomepagePingTaskBindings,
-  taskId: number,
-  clientUuid: string,
-  checked: boolean,
-) {
-  const taskKey = String(taskId);
-  const next = pruneBindings(bindings);
-  const selected = new Set(next[taskKey] ?? []);
-
-  if (checked) selected.add(clientUuid);
-  else selected.delete(clientUuid);
-
-  if (selected.size > 0) {
-    next[taskKey] = [...selected].sort((left, right) => left.localeCompare(right));
-  } else {
-    delete next[taskKey];
-  }
-
-  return next;
-}
-
-function applyAvailableClientAssignments(
-  bindings: HomepagePingTaskBindings,
-  taskId: number,
-  clientUuids: string[],
-) {
-  const taskKey = String(taskId);
-  const next = pruneBindings(bindings);
-  const selected = new Set(next[taskKey] ?? []);
-
-  for (const clientUuid of clientUuids) {
-    selected.add(clientUuid);
-  }
-
-  if (selected.size > 0) {
-    next[taskKey] = [...selected].sort((left, right) => left.localeCompare(right));
-  } else {
-    delete next[taskKey];
-  }
-
-  return next;
 }
 
 function formatFacetValues(values: string[] | undefined) {
@@ -407,6 +352,7 @@ function pickManagedThemeSettings(settings: ResolvedThemeSettings): ThemeSetting
     desktopNodeViewMode: settings.desktopNodeViewMode,
     mobileNodeViewMode: settings.mobileNodeViewMode,
     homepagePingBindings: settings.homepagePingBindings,
+    homepagePingTaskOrder: settings.homepagePingTaskOrder,
     homepagePingAggregationStrategy: settings.homepagePingAggregationStrategy,
     homepagePingPrimaryTasks: settings.homepagePingPrimaryTasks,
     homepagePingTaskGroups: settings.homepagePingTaskGroups,
@@ -457,6 +403,7 @@ export function ThemeManage() {
   const [draftMobileNodeViewMode, setDraftMobileNodeViewMode] =
     useState<NodeViewMode>("compact");
   const [draftBindings, setDraftBindings] = useState<HomepagePingTaskBindings>({});
+  const [draftPingTaskOrder, setDraftPingTaskOrder] = useState<HomepagePingTaskOrder>({});
   const [draftPingAggregationStrategy, setDraftPingAggregationStrategy] =
     useState<HomepagePingAggregationStrategy>("worst");
   const [draftPingPrimaryTasks, setDraftPingPrimaryTasks] =
@@ -506,9 +453,6 @@ export function ThemeManage() {
   const [draftSurfaceOpacity, setDraftSurfaceOpacity] = useState(
     DEFAULT_THEME_SETTINGS.surfaceOpacity,
   );
-  const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
-  const [taskSearch, setTaskSearch] = useState("");
-  const [nodeSearch, setNodeSearch] = useState("");
   const [facetSearch, setFacetSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -558,6 +502,7 @@ export function ThemeManage() {
     setDraftDesktopNodeViewMode(next.desktopNodeViewMode);
     setDraftMobileNodeViewMode(next.mobileNodeViewMode);
     setDraftBindings(next.homepagePingBindings);
+    setDraftPingTaskOrder(next.homepagePingTaskOrder);
     setDraftPingAggregationStrategy(next.homepagePingAggregationStrategy);
     setDraftPingPrimaryTasks(next.homepagePingPrimaryTasks);
     setDraftPingTaskGroups(next.homepagePingTaskGroups);
@@ -614,11 +559,6 @@ export function ThemeManage() {
   );
   const canValidatePingTasks = !tasksLoading && !tasksError;
   const sortedClients = useMemo(() => sortClients(adminClients ?? []), [adminClients]);
-  const clientsById = useMemo(
-    () => new Map(sortedClients.map((client) => [client.uuid, client])),
-    [sortedClients],
-  );
-
   // 后端实际存在的分组,按首页 Tab 的渲染顺序排列(已配置的在前,未排序的在后)。
   // 用户直接拖动这个列表来调整顺序。
   const availableGroups = useMemo(
@@ -637,33 +577,6 @@ export function ThemeManage() {
     setDraftHomeGroupOrder(next);
   };
 
-  const filteredTasks = useMemo(() => {
-    const keyword = taskSearch.trim().toLowerCase();
-    if (!keyword) return sortedTasks;
-    return sortedTasks.filter((task) => {
-      return (
-        task.name.toLowerCase().includes(keyword) ||
-        String(task.id).includes(keyword) ||
-        task.type.toLowerCase().includes(keyword) ||
-        task.target.toLowerCase().includes(keyword)
-      );
-    });
-  }, [sortedTasks, taskSearch]);
-
-  const visibleClients = useMemo(() => {
-    const keyword = nodeSearch.trim().toLowerCase();
-    if (!keyword) return sortedClients;
-    return sortedClients.filter((client) => {
-      const group = String(client.group || "").toLowerCase();
-      const region = String(client.region || "").toLowerCase();
-      return (
-        client.name.toLowerCase().includes(keyword) ||
-        client.uuid.toLowerCase().includes(keyword) ||
-        group.includes(keyword) ||
-        region.includes(keyword)
-      );
-    });
-  }, [nodeSearch, sortedClients]);
   const visibleFacetClients = useMemo(() => {
     const keyword = facetSearch.trim().toLowerCase();
     if (!keyword) return sortedClients;
@@ -785,6 +698,7 @@ export function ThemeManage() {
       desktopNodeViewMode: draftDesktopNodeViewMode,
       mobileNodeViewMode: draftMobileNodeViewMode,
       homepagePingBindings: prunedDraftBindings,
+      homepagePingTaskOrder: normalizeHomepagePingTaskOrder(draftPingTaskOrder, prunedDraftBindings),
       homepagePingAggregationStrategy: draftPingAggregationStrategy,
       homepagePingPrimaryTasks: normalizedDraftPingPrimaryTasks,
       homepagePingTaskGroups: normalizedDraftPingTaskGroups,
@@ -821,6 +735,7 @@ export function ThemeManage() {
     }),
     [
       draftAppearance,
+      draftPingTaskOrder,
       normalizedDraftDisplayTimeZone,
       draftDesktopNodeViewMode,
       draftMobileNodeViewMode,
@@ -899,10 +814,6 @@ export function ThemeManage() {
     [prunedDraftBindings, sortedClients, sortedTasks],
   );
 
-  const assignedTaskIdsByClientUuid = useMemo(
-    () => getHomepagePingTaskIdsByClient(prunedDraftBindings),
-    [prunedDraftBindings],
-  );
   const pingClientBindingRows = useMemo(
     () =>
       buildHomepagePingClientBindingRows({
@@ -928,14 +839,6 @@ export function ThemeManage() {
       const next = { ...prev };
       if (taskId == null) delete next[clientUuid];
       else next[clientUuid] = taskId;
-      return next;
-    });
-  };
-  const setPingTaskGroup = (taskId: number, label: string) => {
-    setDraftPingTaskGroups((prev) => {
-      const next = { ...prev };
-      if (label.trim()) next[String(taskId)] = label;
-      else delete next[String(taskId)];
       return next;
     });
   };
@@ -1107,7 +1010,6 @@ export function ThemeManage() {
     (tasksError instanceof Error ? tasksError.message : null) ||
     (clientsError instanceof Error ? clientsError.message : null);
   const noTasksYet = !tasksLoading && !clientsLoading && sortedTasks.length === 0;
-  const noFilteredTaskMatch = !tasksLoading && !clientsLoading && !noTasksYet && filteredTasks.length === 0;
   const setRatingLabelDraft = (kind: OverviewRatingKind, value: string) => {
     setDraftRatingLabels((prev) => ({ ...prev, [kind]: value }));
   };
@@ -2138,7 +2040,7 @@ export function ThemeManage() {
         title="主页延迟检测"
         description={
           <>
-            为首页延迟卡片指定对应的 Ping 任务与展示节点。每个节点可以绑定多个任务，首页按所选策略聚合延迟与丢包；未分配的节点不会显示延迟。
+            为每台 VPS 选择首页展示的 Ping 任务，支持多选 VPS 批量配置。卡片完整展示已选任务，并始终按配置顺序排列；聚合策略只影响汇总数值。
             {" "}
             如果当前还没有可用任务，请先前往
             {" "}
@@ -2157,16 +2059,7 @@ export function ThemeManage() {
       >
         <div className="flex flex-col gap-4">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
-            <label className="surface-inset flex items-center gap-2 px-3 py-2">
-              <Search size={14} className="text-[var(--text-tertiary)]" />
-              <input
-                value={taskSearch}
-                onChange={(event) => setTaskSearch(event.target.value)}
-                placeholder="搜索 Ping 任务名称 / ID / 类型 / 目标"
-                aria-label="搜索 Ping 任务"
-                className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--text-tertiary)]"
-              />
-            </label>
+            <p className="text-xs text-[var(--text-secondary)]">按 VPS 勾选需要展示的任务，使用上下箭头调整卡片顺序。修改后点击页面顶部保存设置。</p>
             <div className="surface-inset flex items-center justify-between gap-3 px-3 py-2 text-[12px] text-[var(--text-secondary)]">
               <span>首页绑定</span>
               <strong className="text-[var(--text-primary)]">
@@ -2190,7 +2083,9 @@ export function ThemeManage() {
             </div>
           )}
 
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+          <details className="surface-inset p-3">
+            <summary className="cursor-pointer text-xs text-[var(--text-secondary)]">汇总策略、主任务与展示分组（可选，不影响卡片任务顺序）</summary>
+          <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
             <div className="surface-inset px-4 py-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -2289,6 +2184,12 @@ export function ThemeManage() {
             </div>
           </div>
 
+            <div className="mt-3 flex flex-wrap gap-2">{sortedTasks.map((task) => <label key={task.id} className="surface-inset flex items-center gap-2 p-2 text-xs">
+              {task.name || `任务 #${task.id}`}
+              <input aria-label={`设置 ${task.name} 的展示分组`} className="min-w-0 bg-transparent outline-none" placeholder="展示分组（可选）" value={draftPingTaskGroups[task.id] ?? ""} onChange={(event) => setDraftPingTaskGroups((prev) => ({ ...prev, [task.id]: event.target.value }))} />
+            </label>)}</div>
+          </details>
+
           {pingDiagnostics.length > 0 && (
             <div className="theme-manage-diagnostics" role="alert">
               <div className="theme-manage-diagnostics-head">
@@ -2330,196 +2231,7 @@ export function ThemeManage() {
             </div>
           )}
 
-          {noFilteredTaskMatch && (
-            <div className="surface-inset px-4 py-5 text-[13px] text-[var(--text-secondary)]">
-              没有匹配的 Ping 任务。
-            </div>
-          )}
-
-          {!tasksLoading &&
-            !clientsLoading &&
-            !noTasksYet &&
-            filteredTasks.map((task) => {
-              const assigned = draftBindings[String(task.id)] ?? [];
-              const taskGroup = draftPingTaskGroups[String(task.id)] ?? "";
-              const isExpanded = expandedTaskId === task.id;
-              const unselectedVisibleClients = visibleClients.filter(
-                (client) => !assigned.includes(client.uuid),
-              );
-              const allVisibleClientsAssigned =
-                visibleClients.length > 0 && unselectedVisibleClients.length === 0;
-              return (
-                <section key={task.id} className="surface-inset px-4 py-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-[15px] font-semibold text-[var(--text-primary)]">
-                          {task.name || `任务 #${task.id}`}
-                        </h3>
-                        <span className="rounded-full border border-[var(--hairline)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
-                          {task.type || "icmp"}
-                        </span>
-                        <span className="rounded-full border border-[var(--hairline)] px-2 py-0.5 text-[10px] font-medium text-[var(--text-tertiary)]">
-                          {task.interval}s
-                        </span>
-                        <span className="rounded-full border border-[var(--hairline)] px-2 py-0.5 text-[10px] font-medium text-[var(--text-tertiary)]">
-                          ID {task.id}
-                        </span>
-                        {taskGroup.trim() && (
-                          <span className="rounded-full border border-[color-mix(in_srgb,var(--accent-500)_35%,var(--hairline))] bg-[color-mix(in_srgb,var(--accent-500)_9%,transparent)] px-2 py-0.5 text-[10px] font-medium text-[var(--accent-600)]">
-                            {taskGroup.trim()}
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-2 text-[12px] text-[var(--text-secondary)]">
-                        <span className="font-medium text-[var(--text-primary)]">
-                          已绑定 {assigned.length} 个节点
-                        </span>
-                        <span className="mx-2 text-[var(--text-tertiary)]">·</span>
-                        <span title={task.target || ""}>{task.target || "未填写目标"}</span>
-                      </div>
-                      <p
-                        className="mt-2 text-[12px] text-[var(--text-tertiary)]"
-                        title={summarizeNodes(assigned, clientsById)}
-                      >
-                        {summarizeNodes(assigned, clientsById)}
-                      </p>
-                      <label className="mt-3 flex max-w-[320px] items-center gap-2 rounded-[10px] border border-[var(--hairline)] px-3 py-2">
-                        <span className="shrink-0 text-[11px] font-medium text-[var(--text-tertiary)]">
-                          分组
-                        </span>
-                        <input
-                          value={taskGroup}
-                          onChange={(event) => setPingTaskGroup(task.id, event.target.value)}
-                          placeholder="如 海外监测"
-                          className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-[var(--text-tertiary)]"
-                          aria-label={`设置 ${task.name || `任务 #${task.id}`} 的展示分组`}
-                        />
-                      </label>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {assigned.length > 0 && (
-                        <Link
-                          to={buildPingTaskVpsCompareUrl({ taskId: task.id, nodes: assigned })}
-                          className="theme-manage-button is-compact"
-                        >
-                          <BarChart3 size={13} />
-                          <span>查看对比</span>
-                        </Link>
-                      )}
-                      {isExpanded && (
-                        <button
-                          type="button"
-                          disabled={visibleClients.length === 0 || allVisibleClientsAssigned}
-                          onClick={() => {
-                            setDraftBindings((prev) =>
-                              applyAvailableClientAssignments(
-                                prev,
-                                task.id,
-                                visibleClients.map((client) => client.uuid),
-                              ),
-                            );
-                          }}
-                          className="theme-manage-button is-compact"
-                        >
-                          {allVisibleClientsAssigned ? "已全选当前结果" : "全选当前结果"}
-                        </button>
-                      )}
-                      {assigned.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDraftBindings((prev) => {
-                              const next = { ...prev };
-                              delete next[String(task.id)];
-                              return pruneBindings(next);
-                            });
-                          }}
-                          className="theme-manage-button is-compact is-danger"
-                        >
-                          清空节点
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        aria-expanded={isExpanded}
-                        onClick={() => {
-                          setExpandedTaskId((current) => (current === task.id ? null : task.id));
-                          setNodeSearch("");
-                        }}
-                        className="theme-manage-button is-compact"
-                      >
-                        {isExpanded ? "收起节点" : "编辑节点"}
-                      </button>
-                    </div>
-                  </div>
-
-                  {isExpanded && (
-                    <div className="mt-4 border-t border-[var(--hairline)] pt-4">
-                      <label className="surface-inset flex items-center gap-2 px-3 py-2">
-                        <Search size={14} className="text-[var(--text-tertiary)]" />
-                        <input
-                          value={nodeSearch}
-                          onChange={(event) => setNodeSearch(event.target.value)}
-                          placeholder="搜索节点名称 / UUID / 分组 / 地区"
-                          aria-label="搜索节点"
-                          className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--text-tertiary)]"
-                        />
-                      </label>
-
-                      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                        {visibleClients.map((client) => {
-                          const checked = assigned.includes(client.uuid);
-                          const boundTaskCount =
-                            assignedTaskIdsByClientUuid.get(client.uuid)?.length ?? 0;
-                          const subtitle = [client.group, client.uuid].filter(Boolean).join(" · ");
-                          return (
-                            <label
-                              key={client.uuid}
-                              className={clsx(
-                                "flex cursor-pointer items-start gap-3 rounded-[12px] border px-3 py-3 transition-colors",
-                                checked
-                                  ? "border-[var(--border-strong)] bg-[color-mix(in_srgb,var(--hover-bg)_72%,transparent)]"
-                                  : "border-[var(--hairline)] bg-transparent hover:bg-[var(--hover-bg)]",
-                              )}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(event) => {
-                                  const nextChecked = event.target.checked;
-                                  setDraftBindings((prev) =>
-                                    applyClientAssignment(prev, task.id, client.uuid, nextChecked),
-                                  );
-                                }}
-                                className="mt-1 h-4 w-4 shrink-0 accent-[var(--accent-500)]"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
-                                  <Flag region={client.region} size={14} />
-                                  <span className="truncate text-[13px] font-medium text-[var(--text-primary)]">
-                                    {client.name}
-                                  </span>
-                                </div>
-                                <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                                  {subtitle || client.region || "未设置分组"}
-                                </div>
-                                <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                                  {boundTaskCount > 0
-                                    ? `已绑定 ${boundTaskCount} 个任务`
-                                    : "未绑定首页 Ping"}
-                                </div>
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </section>
-              );
-            })}
+          {!tasksLoading && !clientsLoading && <HomepagePingEditor clients={sortedClients} tasks={sortedTasks} bindings={prunedDraftBindings} order={draftPingTaskOrder} onChange={(bindings, order) => { setDraftBindings(bindings); setDraftPingTaskOrder(order); }} />}
         </div>
       </InstancePanel>
     </div>

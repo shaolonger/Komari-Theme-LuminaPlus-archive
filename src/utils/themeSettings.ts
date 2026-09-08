@@ -33,7 +33,7 @@ import {
   isOverviewRatingStyle,
   type OverviewRatingStyle,
 } from "@/utils/overviewRating";
-import { normalizeHomepagePingTaskBindings, type HomepagePingTaskBindings } from "@/utils/pingTasks";
+import { normalizeHomepagePingTaskBindings, normalizeHomepagePingTaskOrder, type HomepagePingTaskBindings, type HomepagePingTaskOrder } from "@/utils/pingTasks";
 import {
   SYSTEM_DISPLAY_TIME_ZONE,
   normalizeDisplayTimeZone,
@@ -51,6 +51,7 @@ export interface ResolvedThemeSettings {
   enableAdminButton: boolean;
   showPingChart: boolean;
   homepagePingBindings: HomepagePingTaskBindings;
+  homepagePingTaskOrder: HomepagePingTaskOrder;
   homepagePingAggregationStrategy: HomepagePingAggregationStrategy;
   homepagePingPrimaryTasks: HomepagePingPrimaryTasks;
   homepagePingTaskGroups: HomepagePingTaskGroups;
@@ -94,6 +95,7 @@ export const DEFAULT_THEME_SETTINGS: ResolvedThemeSettings = {
   enableAdminButton: true,
   showPingChart: true,
   homepagePingBindings: {},
+  homepagePingTaskOrder: {},
   homepagePingAggregationStrategy: DEFAULT_HOMEPAGE_PING_AGGREGATION_STRATEGY,
   homepagePingPrimaryTasks: {},
   homepagePingTaskGroups: {},
@@ -180,6 +182,7 @@ export function normalizeThemeSettings(
     enableAdminButton: enabledUnlessFalse(settings?.enableAdminButton),
     showPingChart: enabledUnlessFalse(settings?.showPingChart),
     homepagePingBindings,
+    homepagePingTaskOrder: normalizeHomepagePingTaskOrder(settings?.homepagePingTaskOrder, homepagePingBindings),
     homepagePingAggregationStrategy: normalizeHomepagePingAggregationStrategy(
       settings?.homepagePingAggregationStrategy,
     ),

@@ -16,7 +16,7 @@ import {
 import {
   cutPeakValues,
   detectTypicalIntervalSeconds,
-  downsampleAligned,
+  downsamplePingAligned,
   insertMetricGapSentinels,
   smoothByCount,
 } from "./chartData";
@@ -26,6 +26,7 @@ import { formatLatency, formatMetricNumber, formatPacketLoss } from "@/utils/for
 import { usePreferences } from "@/hooks/usePreferences";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import type { PingRecord } from "@/types/komari";
+import type { PingTimeRange } from "@/utils/pingTimeRange";
 import type { TimedMetricPoint } from "./chartData";
 
 function weightedPercentileFromSorted(
@@ -54,12 +55,14 @@ export function PingChart({
   uuid,
   hours,
   active = true,
+  range,
 }: {
   uuid: string;
   hours: number;
   active?: boolean;
+  range?: PingTimeRange;
 }) {
-  const { data, isLoading, refetch, dataUpdatedAt } = usePingRecords(uuid, hours, active);
+  const { data, isLoading, error, refetch, dataUpdatedAt } = usePingRecords(uuid, hours, active, range);
   const { resolvedAppearance } = usePreferences();
   const themeSettings = useThemeSettings();
   const displayTimeZone = themeSettings.displayTimeZone;
@@ -167,6 +170,7 @@ export function PingChart({
       ),
       defaultInterval: fallbackInterval,
       matchToleranceRatio: 0.25,
+      inferSamplingInterval: true,
     });
     const times = chartPoints.map((point) => point.time);
     // 让 undefined (off-phase anchor) 和 null (真实丢包/断点) 保持区分：uPlot 会跨过前者、
@@ -175,7 +179,7 @@ export function PingChart({
       chartPoints.map((point) => point[taskKey]),
     );
 
-    const reduced = downsampleAligned(times, perTask, MAX_RENDER_POINTS);
+    const reduced = downsamplePingAligned(times, perTask, MAX_RENDER_POINTS);
     // 始终做轻度按点滑动平均消抖（各时段一致）；“削峰平滑”开启时点窗加大（并已在前面叠加 cutPeakValues 削峰）。
     const smoothed = smoothByCount(
       reduced.perTask,
@@ -270,7 +274,7 @@ export function PingChart({
           stroke: text,
           grid: { stroke: grid, width: 1 },
           ticks: { stroke: grid },
-          size: 54,
+          size: 82,
           values: (_self, splits) => splits.map((value) => (value === 0 ? "" : formatLatency(value))),
         },
       ],
@@ -391,13 +395,15 @@ export function PingChart({
   if (!data?.records.length) {
     return (
       <InstancePanel title="Ping 图表">
-        <div className="instance-empty">暂无延迟记录</div>
+        <div className="instance-empty" role={error ? "alert" : "status"}>{error ? `Ping 数据加载失败：${error.message}` : "所选时间范围暂无延迟记录"}</div>
+        {error && <button className="instance-toggle-button" onClick={() => void refetch()}>重试</button>}
       </InstancePanel>
     );
   }
 
   return (
     <InstancePanel title="Ping 图表">
+      {error && <div role="alert" className="surface-inset p-3 text-sm">Ping 数据加载失败：{error.message}。请重试或调整查询范围。</div>}
       <div className="instance-ping-toolbar">
         <button
           type="button"

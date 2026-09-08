@@ -82,7 +82,7 @@ interface TimeRangeOption {
 // buildHistoryRangeOptions 的 includeRealtime 标志处理，而非改预设列表本身。
 const TIME_RANGE_OPTIONS: TimeRangeOption[] = [
   { label: "1 小时", value: 1 },
-  { label: "4 小时", value: 4 },
+  { label: "6 小时", value: 6 },
   { label: "1 天", value: 24 },
   { label: "7 天", value: 168 },
   { label: "30 天", value: 720 },

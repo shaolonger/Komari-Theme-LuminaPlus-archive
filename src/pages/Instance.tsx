@@ -13,8 +13,9 @@ import { useAllNodeMeta, useVisibleNodeUuids } from "@/hooks/useNode";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import type { NodeInfo } from "@/types/komari";
+import { previousBeijingEvening, resolveBeijingRange, type PingTimeRange } from "@/utils/pingTimeRange";
 
-const DEFAULT_PING_HOURS = 4;
+const DEFAULT_PING_HOURS = 6;
 
 export function Instance() {
   const { uuid } = useParams<{ uuid: string }>();
@@ -26,6 +27,10 @@ export function Instance() {
   const [chartType, setChartType] = useState<"load" | "ping">("load");
   const [loadHours, setLoadHours] = useState(0);
   const [pingHours, setPingHours] = useState(DEFAULT_PING_HOURS);
+  const [customPing, setCustomPing] = useState(false);
+  const [rangeDraft, setRangeDraft] = useState(previousBeijingEvening);
+  const [appliedRange, setAppliedRange] = useState<PingTimeRange>(() => resolveBeijingRange(previousBeijingEvening())!);
+  const parsedRange = resolveBeijingRange(rangeDraft);
   const chartControlsRef = useRef<HTMLDivElement | null>(null);
 
   const nodeOptions = useMemo(() => {
@@ -201,20 +206,37 @@ export function Instance() {
               <button
                 key={range.value}
                 type="button"
-                data-active={pingHours === range.value ? "true" : "false"}
-                aria-pressed={pingHours === range.value}
+                data-active={!customPing && pingHours === range.value ? "true" : "false"}
+                aria-pressed={!customPing && pingHours === range.value}
                 onClick={() => {
                   startTransition(() => {
                     setPingHours(range.value);
+                    setCustomPing(false);
                   });
                 }}
               >
                 {range.label}
               </button>
             ))}
+            <button type="button" data-active={customPing ? "true" : "false"} aria-pressed={customPing} onClick={() => setCustomPing(true)}>自定义</button>
           </div>
         )}
       </div>
+      {chartType === "ping" && customPing && (
+        <form className="surface-inset flex flex-wrap items-end gap-3 p-3" onSubmit={(event) => {
+          event.preventDefault();
+          if (parsedRange) setAppliedRange(parsedRange);
+        }}>
+          <label className="flex flex-col gap-1 text-xs">开始时间（北京时间）
+            <input required type="datetime-local" className="surface-inset p-2" value={rangeDraft.start} onChange={(event) => setRangeDraft({ ...rangeDraft, start: event.target.value })} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">结束时间（北京时间）
+            <input required type="datetime-local" className="surface-inset p-2" value={rangeDraft.end} onChange={(event) => setRangeDraft({ ...rangeDraft, end: event.target.value })} />
+          </label>
+          <button type="submit" className="instance-toggle-button" disabled={!parsedRange}>应用时间范围</button>
+          {!parsedRange && <span role="alert" className="text-xs">请选择有效时间，结束时间须晚于开始时间。</span>}
+        </form>
+      )}
       <div className="instance-chart-stage">
         <div
           className="instance-chart-view"
@@ -231,7 +253,8 @@ export function Instance() {
           {showPingChart ? (
             <PingChart
               uuid={uuid}
-              hours={pingHours}
+              hours={customPing ? (Date.parse(appliedRange.end) - Date.parse(appliedRange.start)) / 3_600_000 : pingHours}
+              range={customPing ? appliedRange : undefined}
               active={chartType === "ping"}
             />
           ) : null}
