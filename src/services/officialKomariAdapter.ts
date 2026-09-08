@@ -525,6 +525,34 @@ function taskFromId(id: number): PingTask {
   };
 }
 
+/**
+ * `public:getPublicPingTasks` is a global catalog in official Komari, whereas
+ * the older per-node Ping endpoint only returned tasks that applied to the
+ * requested node. Preserve the latter page-level behaviour while retaining a
+ * task that has historical points in the queried time window (it may have
+ * been unbound after those points were recorded).
+ */
+function scopedOfficialPingTasks(
+  tasks: z.infer<typeof OfficialPingTaskSchema>[],
+  entityIds: string[],
+  observedTaskIds: ReadonlySet<number>,
+) {
+  const requested = new Set(entityIds);
+  const taskById = new Map<number, PingTask>();
+
+  for (const task of tasks) {
+    const appliesToRequestedNode = task.clients.some((uuid) => requested.has(uuid));
+    if (!appliesToRequestedNode && !observedTaskIds.has(task.id)) continue;
+    taskById.set(task.id, toPingTask(task));
+  }
+
+  for (const taskId of observedTaskIds) {
+    if (!taskById.has(taskId)) taskById.set(taskId, taskFromId(taskId));
+  }
+
+  return Array.from(taskById.values()).sort((left, right) => left.id - right.id);
+}
+
 export async function getOfficialComparisonPingRecords({
   uuids,
   hours,
@@ -567,14 +595,10 @@ export async function getOfficialComparisonPingRecords({
   }
   records.sort((left, right) => metricTimeKey(left.time) - metricTimeKey(right.time));
 
-  const taskById = new Map(tasks.map((task) => [task.id, toPingTask(task)]));
-  for (const taskId of observedTaskIds) {
-    if (!taskById.has(taskId)) taskById.set(taskId, taskFromId(taskId));
-  }
   return {
     count: records.length,
     records,
-    tasks: Array.from(taskById.values()).sort((left, right) => left.id - right.id),
+    tasks: scopedOfficialPingTasks(tasks, entityIds, observedTaskIds),
   };
 }
 
@@ -652,7 +676,20 @@ export async function getOfficialPingOverviewForNodes(
     ),
   ]);
   const buckets = collectPingBuckets(metricResponse.series);
-  const taskById = new Map(tasks.map((task) => [task.id, toPingTask(task)]));
+  const observedTaskIds = new Set<number>();
+  for (const stat of statsResponse.stats) {
+    const taskId = typeof stat.task_id === "number"
+      ? stat.task_id
+      : Number.parseInt(stat.task_id, 10);
+    if (entityIds.includes(stat.entity_id) && Number.isSafeInteger(taskId) && taskId > 0) {
+      observedTaskIds.add(taskId);
+    }
+  }
+  for (const byTask of buckets.values()) {
+    for (const taskId of byTask.keys()) observedTaskIds.add(taskId);
+  }
+  const scopedTasks = scopedOfficialPingTasks(tasks, entityIds, observedTaskIds);
+  const taskById = new Map(scopedTasks.map((task) => [task.id, task]));
   const stats: PingOverviewResult["stats"] = Object.fromEntries(entityIds.map((uuid) => [uuid, {}]));
   const series: PingOverviewResult["series"] = Object.fromEntries(entityIds.map((uuid) => [uuid, {}]));
 

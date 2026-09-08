@@ -254,10 +254,53 @@ describe("official Komari metric adapter", () => {
     ]);
   });
 
+  it("scopes the official global task catalog to requested nodes and observed history", async () => {
+    rpcCall.mockImplementation((method: string) => {
+      if (method === "public:getPublicPingTasks") {
+        return Promise.resolve([
+          { id: 3, name: "Bound", clients: ["node-a"], type: "icmp", interval: 60 },
+          { id: 8, name: "Other node", clients: ["node-b"], type: "icmp", interval: 60 },
+          { id: 12, name: "Historical", clients: [], type: "tcp", interval: 30 },
+        ]);
+      }
+      if (method === "public:queryMetrics") {
+        return Promise.resolve(metricResponse([
+          {
+            metric_key: "ping.latency_ms",
+            entity_id: "node-a",
+            tags: { task_id: "12" },
+            points: [{ time: "2026-01-01T00:10:00.000Z", value: 25, count: 1 }],
+          },
+          {
+            metric_key: "ping.loss",
+            entity_id: "node-a",
+            tags: { task_id: "12" },
+            points: [{ time: "2026-01-01T00:10:00.000Z", value: 0, count: 1 }],
+          },
+        ]));
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await getOfficialComparisonPingRecords({
+      uuids: ["node-a"],
+      hours: 1,
+      maxPoints: 24,
+    });
+
+    expect(result.tasks.map((task) => task.id)).toEqual([3, 12]);
+    expect(result.records).toEqual([
+      expect.objectContaining({ client: "node-a", task_id: 12, value: 25 }),
+    ]);
+  });
+
   it("uses one shared one-hour window for official ping tasks, metrics, and stats", async () => {
     rpcCall.mockImplementation((method: string) => {
       if (method === "public:getPublicPingTasks") {
-        return Promise.resolve([{ id: 7, name: "Edge", clients: ["node-a"], type: "icmp", interval: 30 }]);
+        return Promise.resolve([
+          { id: 7, name: "Edge", clients: ["node-a"], type: "icmp", interval: 30 },
+          { id: 8, name: "Other node", clients: ["node-b"], type: "icmp", interval: 30 },
+        ]);
       }
       if (method === "public:queryMetrics") {
         return Promise.resolve(metricResponse([
@@ -318,6 +361,7 @@ describe("official Komari metric adapter", () => {
     expect(metricParams.end).toBe(statsParams.end);
     expect(Date.parse(metricParams.end) - Date.parse(metricParams.start)).toBe(60 * 60 * 1_000);
     expect(overview.stats["node-a"]?.["7"]).toMatchObject({ total: 10, lost: 1, loss: 10 });
+    expect(overview.tasks.map((task) => task.id)).toEqual([7]);
     expect(overview.series["node-a"]?.["7"]).toEqual([
       { time: "2026-01-01T00:10:00.000Z", value: 40, sample_count: 5, loss_count: 0, loss: 0 },
       { time: "2026-01-01T00:20:00.000Z", value: -1, sample_count: 5, loss_count: 1, loss: 20 },

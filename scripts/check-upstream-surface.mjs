@@ -151,6 +151,12 @@ expectAll(readSource(server, "internal/metricstore/ping_records.go"), "internal/
   "MetricName: MetricPingLoss",
 ]);
 
+expectAll(readSource(server, "database/models/pingTask.go"), "database/models/pingTask.go", [
+  "func (task PingTask) AppliesToClient(uuid string) bool",
+  "for _, client := range task.Clients {",
+  "if client == uuid {",
+]);
+
 expectAll(readSource(server, "web/router/router.go"), "web/router/router.go", [
   'r.GET("/api/me", jsonRpc.Bind("public:getMe", jsonRpc.WithRaw()))',
   'r.GET("/api/nodes", jsonRpc.Bind("public:getNodesInformation"))',

@@ -38,6 +38,7 @@ jobs:
             web/public
             web/api/admin
             web/api/client
+            database/models
             internal/metricstore
             pkg/rpc
             protocol/v2
