@@ -1,13 +1,7 @@
 import { z } from "zod";
 import { getRpc2Client, isRpcTransportError } from "@/services/rpc2Client";
-import { getKomariBackendProfile, type KomariBackendKind } from "@/services/backendProfile";
-import {
-  getOfficialComparisonLoadRecords,
-  getOfficialComparisonPingRecords,
-  getOfficialPingOverviewForNodes,
-  type MetricTimeRange,
-} from "@/services/officialKomariAdapter";
-import { requireRpcCapability } from "@/services/rpcCapabilities";
+import type { KomariBackendKind } from "@/services/backendProfile";
+import type { MetricTimeRange } from "@/services/officialKomariAdapter";
 import type { PingOverviewResult, RealtimeDelta } from "@/generated/rpcContract";
 import {
   MeSchema,
@@ -120,6 +114,21 @@ export type ComparisonLoadType =
 
 export type ComparisonLoadRecords = Record<string, LoadRecordsResponse["records"]>;
 export type ComparisonTimeRange = MetricTimeRange;
+
+// The official metric adapter contains the larger protocol-normalization
+// schemas. It is only useful after the backend probe selects upstream, so
+// lazy-load it instead of charging every legacy/home initial render for it.
+const getOfficialKomariAdapter = () => import("@/services/officialKomariAdapter");
+
+// Detection is needed only when a data request starts. Keeping it out of the
+// eager Home bundle preserves the original first-paint budget for both
+// supported backends; the promise is still cached by backendProfile itself.
+const getBackendProfile = () => import("@/services/backendProfile")
+  .then(({ getKomariBackendProfile }) => getKomariBackendProfile());
+
+const requireLegacyRpcCapability = (capability: "ping.overview") =>
+  import("@/services/rpcCapabilities")
+    .then(({ requireRpcCapability }) => requireRpcCapability(capability));
 
 export interface RealtimeUpdate {
   delta: RealtimeDelta;
@@ -347,7 +356,7 @@ export async function getRealtimeUpdate(
   uuids: string[],
   options?: { waitMs?: number; timeout?: number; signal?: AbortSignal },
 ): Promise<RealtimeUpdate> {
-  const backend = await getKomariBackendProfile();
+  const backend = await getBackendProfile();
   const uniqueUuids = Array.from(new Set(uuids.filter(Boolean)));
   if (backend.kind === "official-v1.4") {
     const reports = await getNodesLatestStatus(uniqueUuids, {
@@ -391,7 +400,35 @@ export async function getAdminClients(): Promise<AdminClient[]> {
 export async function getLoadRecords(
   uuid: string,
   hours = 6,
+  /**
+   * Upstream metric points intentionally omit capacity denominators.  The
+   * current node metadata keeps the instance charts' percentage axes useful
+   * without adding a second per-chart HTTP request.
+   */
+  node?: NodeInfo,
 ): Promise<LoadRecordsResponse> {
+  let backend: Awaited<ReturnType<typeof getBackendProfile>> | undefined;
+  try {
+    backend = await getBackendProfile();
+  } catch (error) {
+    // During an RPC transport outage the legacy HTTP endpoint remains a safe
+    // read-only fallback. Do not swallow protocol/permission failures: they
+    // need to remain actionable rather than silently changing data sources.
+    if (!isRpcTransportError(error)) throw error;
+  }
+  if (backend?.kind === "official-v1.4") {
+    const { getOfficialComparisonLoadRecords } = await getOfficialKomariAdapter();
+    const records = await getOfficialComparisonLoadRecords({
+      uuids: [uuid],
+      hours,
+      loadType: "all",
+      nodes: node ? [node] : undefined,
+      maxPoints: getRecordsMaxCount(hours, LOAD_RECORDS_PER_HOUR),
+    });
+    const normalized = records[uuid] ?? [];
+    return { count: normalized.length, records: normalized };
+  }
+  if (!backend) return await getLegacyLoadRecords(uuid, hours);
   try {
     const maxCount = getRecordsMaxCount(hours, LOAD_RECORDS_PER_HOUR);
     const payload = await rpcCall(
@@ -439,8 +476,9 @@ export async function getComparisonLoadRecords({
   if (uniqueUuids.length === 0) return {};
 
   const perNodeMaxCount = getComparisonRecordsMaxCount(hours, LOAD_RECORDS_PER_HOUR);
-  const backend = await getKomariBackendProfile();
+  const backend = await getBackendProfile();
   if (backend.kind === "official-v1.4") {
+    const { getOfficialComparisonLoadRecords } = await getOfficialKomariAdapter();
     return await getOfficialComparisonLoadRecords({
       uuids: uniqueUuids,
       hours,
@@ -483,6 +521,21 @@ export async function getPingRecords(
   uuid: string,
   hours = 6,
 ): Promise<PingRecordsResponse> {
+  let backend: Awaited<ReturnType<typeof getBackendProfile>> | undefined;
+  try {
+    backend = await getBackendProfile();
+  } catch (error) {
+    if (!isRpcTransportError(error)) throw error;
+  }
+  if (backend?.kind === "official-v1.4") {
+    const { getOfficialComparisonPingRecords } = await getOfficialKomariAdapter();
+    return await getOfficialComparisonPingRecords({
+      uuids: [uuid],
+      hours,
+      maxPoints: getRecordsMaxCount(hours, PING_RECORDS_PER_HOUR),
+    });
+  }
+  if (!backend) return await getLegacyPingRecords(uuid, hours);
   try {
     const maxCount = getRecordsMaxCount(hours, PING_RECORDS_PER_HOUR);
     const payload = await rpcCall(
@@ -528,8 +581,9 @@ export async function getComparisonPingRecords({
   }
 
   const perNodeMaxCount = getComparisonRecordsMaxCount(hours, PING_RECORDS_PER_HOUR);
-  const backend = await getKomariBackendProfile();
+  const backend = await getBackendProfile();
   if (backend.kind === "official-v1.4") {
+    const { getOfficialComparisonPingRecords } = await getOfficialKomariAdapter();
     return await getOfficialComparisonPingRecords({
       uuids: uniqueUuids,
       hours,
@@ -626,6 +680,39 @@ export async function getPingOverview(
   taskId?: number,
   options?: { signal?: AbortSignal },
 ): Promise<PingOverviewResponse> {
+  let backend: Awaited<ReturnType<typeof getBackendProfile>> | undefined;
+  try {
+    backend = await getBackendProfile();
+  } catch (error) {
+    if (!isRpcTransportError(error)) throw error;
+  }
+  if (backend?.kind === "official-v1.4") {
+    const { getOfficialComparisonPingRecords } = await getOfficialKomariAdapter();
+    // This compatibility helper predates the dashboard's batched overview
+    // endpoint.  Upstream does not have its fork-only `common:getRecords`
+    // shape, so use the same public metric adapter as the other chart paths.
+    // The helper is rarely used, but keeping it functional prevents an
+    // accidental feature regression for integrations importing this API.
+    const nodes = await getNodes();
+    const response = await getOfficialComparisonPingRecords({
+      uuids: nodes.map((node) => node.uuid),
+      hours,
+      maxPoints: getRecordsMaxCount(hours, PING_RECORDS_PER_HOUR),
+      options,
+    });
+    const records = taskId == null
+      ? response.records
+      : response.records.filter((record) => record.task_id === taskId);
+    const tasks = taskId == null
+      ? response.tasks
+      : response.tasks.filter((task) => task.id === taskId);
+    return {
+      count: records.length,
+      records,
+      tasks,
+      basicInfo: [],
+    };
+  }
   try {
     const payload = await rpcCall(
       "common:getRecords",
@@ -671,11 +758,12 @@ export async function getPingOverviewForNodes(
   uuids: string[],
   options?: { signal?: AbortSignal },
 ): Promise<PingOverviewResult> {
-  const backend = await getKomariBackendProfile();
+  const backend = await getBackendProfile();
   if (backend.kind === "official-v1.4") {
+    const { getOfficialPingOverviewForNodes } = await getOfficialKomariAdapter();
     return await getOfficialPingOverviewForNodes(uuids, options);
   }
-  await requireRpcCapability("ping.overview");
+  await requireLegacyRpcCapability("ping.overview");
   return await rpcCall(
     "common:getPingOverview",
     { uuids: Array.from(new Set(uuids.filter(Boolean))) },

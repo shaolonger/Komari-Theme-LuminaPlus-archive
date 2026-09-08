@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectRealtimeDeltaTargets,
   resolveFlatConnectionsTcp,
+  resolveRealtimeOnline,
   resolveTrafficTotal,
 } from "@/services/wsStore";
 
@@ -59,6 +60,18 @@ describe("resolveFlatConnectionsTcp", () => {
 
   it("clamps to 0 when udp exceeds the combined count", () => {
     expect(resolveFlatConnectionsTcp({ connections: 3, connections_udp: 5 })).toBe(0);
+  });
+});
+
+describe("resolveRealtimeOnline", () => {
+  it("honors the explicit online flag in an official flat latest-status record", () => {
+    expect(resolveRealtimeOnline({ online: true, cpu: 12 })).toBe(true);
+    expect(resolveRealtimeOnline({ online: false, cpu: 12 })).toBe(false);
+  });
+
+  it("marks a node missing from an official snapshot as offline", () => {
+    expect(resolveRealtimeOnline(undefined)).toBe(false);
+    expect(resolveRealtimeOnline(null)).toBe(false);
   });
 });
 

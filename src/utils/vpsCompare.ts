@@ -14,6 +14,7 @@ import {
   type HomepagePingTaskBindings,
 } from "@/utils/pingTasks";
 import { isLostPingSample, isValidPingLatency } from "@/utils/pingSamples";
+import { buildPingTaskVpsCompareUrl } from "@/utils/pingCompareLink";
 
 export type ComparisonMetricKey =
   | "cpu"
@@ -77,13 +78,7 @@ export interface ComparisonRequestWindowInput {
   maxHours?: number | null;
 }
 
-export interface PingTaskVpsCompareUrlInput {
-  taskId: number | null | undefined;
-  nodes?: string[];
-  metricKey?: Extract<ComparisonMetricKey, "ping_latency" | "ping_loss">;
-  hours?: number;
-  view?: "trend" | "ranking";
-}
+export type { PingTaskVpsCompareUrlInput } from "@/utils/pingCompareLink";
 
 export interface ComparisonStats {
   samples: number;
@@ -464,24 +459,7 @@ export function getPingTaskBoundNodeUuids(
     .filter((uuid) => !visibleSet || visibleSet.has(uuid));
 }
 
-export function buildPingTaskVpsCompareUrl({
-  taskId,
-  nodes = [],
-  metricKey = "ping_latency",
-  hours = 4,
-  view = "trend",
-}: PingTaskVpsCompareUrlInput) {
-  const params = new URLSearchParams({
-    metric: metricKey,
-    hours: String(hours),
-    tab: view,
-  });
-  const uniqueNodes = Array.from(new Set(nodes.map((node) => node.trim()).filter(Boolean)));
-  if (uniqueNodes.length > 0) params.set("nodes", uniqueNodes.join(","));
-  const normalizedTaskId = normalizeComparisonPingTaskId(taskId);
-  if (normalizedTaskId != null) params.set("pingTask", String(normalizedTaskId));
-  return `/compare?${params.toString()}`;
-}
+export { buildPingTaskVpsCompareUrl };
 
 function pingTaskMetadataScore(task: PingTask) {
   const name = task.name?.trim() ?? "";

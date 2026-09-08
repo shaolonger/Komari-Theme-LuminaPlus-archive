@@ -80,6 +80,26 @@ describe("official Komari metric adapter", () => {
         entity_id: "node-a",
         points: [{ time: "2026-01-01T00:10:00.000Z", value: 800, count: 3 }],
       },
+      {
+        metric_key: "net.in.rate",
+        entity_id: "node-a",
+        points: [{ time: "2026-01-01T00:10:00.000Z", value: 30, count: 3 }],
+      },
+      {
+        metric_key: "net.out.rate",
+        entity_id: "node-a",
+        points: [{ time: "2026-01-01T00:10:00.000Z", value: 40, count: 3 }],
+      },
+      {
+        metric_key: "net.total.up",
+        entity_id: "node-a",
+        points: [{ time: "2026-01-01T00:10:00.000Z", value: 300, count: 3 }],
+      },
+      {
+        metric_key: "net.total.down",
+        entity_id: "node-a",
+        points: [{ time: "2026-01-01T00:10:00.000Z", value: 400, count: 3 }],
+      },
     ]));
 
     const records = await getOfficialComparisonLoadRecords({
@@ -108,6 +128,10 @@ describe("official Komari metric adapter", () => {
       ram_total: 1_000,
       disk: 800,
       disk_total: 2_000,
+      net_in: 30,
+      net_out: 40,
+      net_total_up: 300,
+      net_total_down: 400,
     });
   });
 

@@ -16,7 +16,7 @@ function firstConfiguredFacet(
 /**
  * The official server deliberately has no provider/business-role columns.
  * Reuse the theme's existing per-node facet data as a non-destructive metadata
- * overlay so list sort, cards and instance pages agree with home filtering.
+ * overlay so home filtering and list sorting agree on the same labels.
  */
 export function overlayConfiguredNodeMeta(
   meta: NodeInfo,

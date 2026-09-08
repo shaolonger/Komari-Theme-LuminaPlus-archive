@@ -28,6 +28,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # A tag is a release candidate, not merely a packaging trigger.  Keep
+      # every release artifact behind the same full gate used locally.
+      - name: Run release gates
+        run: npm run test:release-gates
+
       - name: Build package
         run: npm run package
 
@@ -45,16 +50,31 @@ jobs:
         shell: bash
         run: |
           notes=".github/release-notes/${GITHUB_REF_NAME}.md"
-          if [[ ! -f "$notes" ]]; then
-            notes=".github/release-notes/v1.1.4.md"
+          if [[ -f "$notes" ]]; then
+            echo "path=$notes" >> "$GITHUB_OUTPUT"
+            echo "source=curated" >> "$GITHUB_OUTPUT"
+          else
+            # Never publish a new tag with notes copied from an unrelated old
+            # release. GitHub-generated notes accurately describe this tag.
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "source=generated" >> "$GITHUB_OUTPUT"
+            echo "::notice::No curated release note found for ${GITHUB_REF_NAME}; generating notes from this release."
           fi
-          echo "path=$notes" >> "$GITHUB_OUTPUT"
 
-      - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+      - name: Publish GitHub release with curated notes
+        if: startsWith(github.ref, 'refs/tags/') && steps.release-notes.outputs.source == 'curated'
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             Komari-Theme-LuminaPlus-v*.zip
             preview.png
           body_path: ${{ steps.release-notes.outputs.path }}
+
+      - name: Publish GitHub release with generated notes
+        if: startsWith(github.ref, 'refs/tags/') && steps.release-notes.outputs.source == 'generated'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            Komari-Theme-LuminaPlus-v*.zip
+            preview.png
+          generate_release_notes: true

@@ -14,6 +14,8 @@ import {
   getComparisonLoadRecords,
   getComparisonPingRecords,
   getLoadRecords,
+  getPingOverview,
+  getPingRecords,
   getRealtimeDelta,
   getRealtimeUpdate,
   getPingOverviewForNodes,
@@ -173,6 +175,95 @@ describe("RPC compatibility fallback", () => {
     expect(result.series["node-a"]?.["8"]?.[0]).toMatchObject({ value: 25 });
   });
 
+  it("routes single-node instance history through the official metric adapter", async () => {
+    rpcCall.mockImplementation((method: string, params?: Record<string, unknown>) => {
+      if (method === "rpc.discover") {
+        return Promise.reject(new RpcResponseError("method not found", -32601));
+      }
+      if (method === "rpc.methods") {
+        return Promise.resolve([
+          "common:getNodesLatestStatus",
+          "public:getPublicPingTasks",
+          "public:queryMetrics",
+          "public:getPingMetricStats",
+        ]);
+      }
+      if (method === "public:getPublicPingTasks") {
+        return Promise.resolve([{ id: 8, name: "Edge", clients: ["node-a"], interval: 60 }]);
+      }
+      if (method === "public:queryMetrics") {
+        const metricKeys = params?.metric_keys as string[] | undefined;
+        if (metricKeys?.includes("cpu.usage")) {
+          return Promise.resolve({
+            series: [{
+              metric_key: "cpu.usage",
+              entity_id: "node-a",
+              points: [{ time: "2026-01-01T00:00:00.000Z", value: 12, count: 1 }],
+            }],
+          });
+        }
+        return Promise.resolve({
+          series: [{
+            metric_key: "ping.latency_ms",
+            entity_id: "node-a",
+            tags: { task_id: "8" },
+            points: [{ time: "2026-01-01T00:00:00.000Z", value: 25, count: 1 }],
+          }],
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const [load, ping] = await Promise.all([
+      getLoadRecords("node-a", 1),
+      getPingRecords("node-a", 1),
+    ]);
+
+    expect(load.records[0]).toMatchObject({ client: "node-a", cpu: 12 });
+    expect(ping.records[0]).toMatchObject({ client: "node-a", task_id: 8, value: 25 });
+    expect(ping.tasks).toEqual([expect.objectContaining({ id: 8, name: "Edge" })]);
+    expect(rpcCall.mock.calls.map(([method]) => method)).not.toContain("common:getRecords");
+  });
+
+  it("keeps the legacy ping-overview helper functional on an official backend", async () => {
+    rpcCall.mockImplementation((method: string) => {
+      if (method === "rpc.discover") {
+        return Promise.reject(new RpcResponseError("method not found", -32601));
+      }
+      if (method === "rpc.methods") {
+        return Promise.resolve([
+          "common:getNodesLatestStatus",
+          "public:getPublicPingTasks",
+          "public:queryMetrics",
+          "public:getPingMetricStats",
+        ]);
+      }
+      if (method === "public:getPublicPingTasks") {
+        return Promise.resolve([{ id: 8, name: "Edge", clients: ["node-a"], interval: 60 }]);
+      }
+      if (method === "public:queryMetrics") {
+        return Promise.resolve({
+          series: [{
+            metric_key: "ping.latency_ms",
+            entity_id: "node-a",
+            tags: { task_id: "8" },
+            points: [{ time: "2026-01-01T00:00:00.000Z", value: 25, count: 1 }],
+          }],
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([
+      { uuid: "node-a" },
+    ]), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    const overview = await getPingOverview(1, 8);
+
+    expect(overview.records).toEqual([expect.objectContaining({ client: "node-a", task_id: 8 })]);
+    expect(overview.tasks).toEqual([expect.objectContaining({ id: 8, name: "Edge" })]);
+    expect(rpcCall.mock.calls.map(([method]) => method)).not.toContain("common:getRecords");
+  });
+
   it("falls back to legacy HTTP only for a typed transport failure", async () => {
     rpcCall.mockRejectedValueOnce(new RpcTransportError("offline"));
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -192,7 +283,14 @@ describe("RPC compatibility fallback", () => {
     new RpcProtocolError("invalid response"),
     new Error("schema mismatch"),
   ])("does not hide a server or protocol defect behind REST: %s", async (error) => {
-    rpcCall.mockRejectedValueOnce(error);
+    rpcCall
+      .mockResolvedValueOnce({
+        jsonrpc_version: "2.0",
+        contract: "komari.rpc.v2.4",
+        methods: ["common:getRecords"],
+        capabilities: {},
+      })
+      .mockRejectedValueOnce(error);
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 

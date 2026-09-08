@@ -58,6 +58,7 @@ import {
 } from "@/utils/homeVpsViews";
 import {
   overlayAdminClientMeta,
+  overlayConfiguredNodeMeta,
   shouldIncludeAgentVersionCompleteness,
 } from "@/utils/nodeMetaOverlay";
 import { invertHomepagePingTaskBindings } from "@/utils/pingTasks";
@@ -919,10 +920,13 @@ export function NodeGrid() {
       new Map(
         allMeta.map((node) => [
           node.uuid,
-          overlayAdminClientMeta(node, adminClientByUuid.get(node.uuid)),
+          overlayAdminClientMeta(
+            overlayConfiguredNodeMeta(node, themeSettings.homeNodeFacets),
+            adminClientByUuid.get(node.uuid),
+          ),
         ]),
       ),
-    [adminClientByUuid, allMeta],
+    [adminClientByUuid, allMeta, themeSettings.homeNodeFacets],
   );
   const includeAgentVersion = shouldIncludeAgentVersionCompleteness({
     loggedIn: me?.logged_in === true,

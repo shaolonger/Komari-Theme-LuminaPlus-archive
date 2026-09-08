@@ -6,7 +6,7 @@ import { HOMEPAGE_PING_WINDOW_HOURS } from "@/utils/homepagePingOverview";
 import { formatLatencyValue, formatMetricNumber } from "@/utils/format";
 import { latencyHeatColor } from "@/utils/metricTone";
 import { buildPingSparklineGeometry } from "@/utils/pingSparkline";
-import { buildPingTaskVpsCompareUrl } from "@/utils/vpsCompare";
+import { buildPingTaskVpsCompareUrl } from "@/utils/pingCompareLink";
 
 const REGULAR_SOURCE_LIMIT = 4;
 const COMPACT_SOURCE_LIMIT = 4;

@@ -458,7 +458,11 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-function resolveOnline(rawRecord: unknown): boolean {
+// Official current-status snapshots omit a node entirely when it has no
+// retained report. Treat that omission as offline; snapshots reconcile every
+// known node, so stale card state cannot survive an official polling cycle.
+// Exported for protocol fixtures and focused regression tests.
+export function resolveRealtimeOnline(rawRecord: unknown): boolean {
   if (rawRecord == null) return false;
   if (typeof rawRecord === "boolean") return rawRecord;
   const record = asRecord(rawRecord);
@@ -595,7 +599,7 @@ function applyLatestStatus(
     const prev = state.metricsByUuid[uuid];
     if (!meta || !prev) continue;
     const rawRecord = records[uuid];
-    const online = onlineOverrides.get(uuid) ?? resolveOnline(rawRecord);
+    const online = onlineOverrides.get(uuid) ?? resolveRealtimeOnline(rawRecord);
     const realtime = normalizeRealtime(rawRecord, meta, prev);
     const merged = realtime
       ? mergeRealtime(meta, prev, realtime, online)

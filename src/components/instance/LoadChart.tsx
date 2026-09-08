@@ -3,7 +3,7 @@ import UplotReact from "uplot-react";
 import type uPlot from "uplot";
 import { ArrowDown, ArrowUp, Cpu, Gauge, HardDrive, MemoryStick, Network, RefreshCw, Workflow } from "lucide-react";
 import { useLoadRecords } from "@/hooks/useRecords";
-import { useNodeMetrics } from "@/hooks/useNode";
+import { useNodeMeta, useNodeMetrics } from "@/hooks/useNode";
 import { InstancePanel, InstanceChartLoading } from "./InstancePanel";
 import {
   buildChartTooltipHooks,
@@ -400,7 +400,8 @@ export function LoadChart({
   active?: boolean;
 }) {
   const queryHours = hours === 0 ? 1 : hours;
-  const { data, isLoading, refetch } = useLoadRecords(uuid, queryHours, active);
+  const nodeMeta = useNodeMeta(uuid, active);
+  const { data, isLoading, refetch } = useLoadRecords(uuid, queryHours, active, nodeMeta);
   const isRealtime = hours === 0;
   const node = useNodeMetrics(uuid, isRealtime && active);
   const { resolvedAppearance } = usePreferences();

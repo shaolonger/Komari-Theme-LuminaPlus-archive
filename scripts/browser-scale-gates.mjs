@@ -23,13 +23,57 @@ const mime = {
   ".json": "application/json; charset=utf-8",
   ".woff2": "font/woff2",
 };
-let activeFixture = { nodes: 30, soak: false, run: "startup" };
-const requestCounts = new Map();
+const BACKEND_PROFILES = Object.freeze({
+  legacy: Object.freeze({
+    id: "fork-rpc-v2.4",
+    label: "fork RPC v2.4",
+  }),
+  official: Object.freeze({
+    id: "official-komari-v1.4.3",
+    label: "official Komari 1.4.3",
+  }),
+});
 
-function count(label) {
-  const counts = requestCounts.get(activeFixture.run) ?? {};
+// `rpc.discover` is intentionally not listed here: upstream rejects that
+// probe with -32601 so the client can negotiate `rpc.methods`. The calls
+// below, by contrast, must never be made after a profile has been selected.
+const LEGACY_ONLY_RPC_METHODS = [
+  "common:getRealtimeDelta",
+  "common:getPingOverview",
+  "common:getRecords",
+];
+const OFFICIAL_ONLY_RPC_METHODS = [
+  "rpc.methods",
+  "common:getNodesLatestStatus",
+  "public:getPublicPingTasks",
+  "public:queryMetrics",
+  "public:getPingMetricStats",
+];
+
+let activeFixture = {
+  backend: BACKEND_PROFILES.legacy.id,
+  nodes: 30,
+  soak: false,
+  run: "startup",
+};
+const requestCounts = new Map();
+const requestPayloads = new Map();
+
+function count(label, run = activeFixture.run) {
+  const counts = requestCounts.get(run) ?? {};
   counts[label] = (counts[label] ?? 0) + 1;
-  requestCounts.set(activeFixture.run, counts);
+  requestCounts.set(run, counts);
+}
+
+function recordRpcRequest(run, method, params) {
+  count(`rpc:${method}`, run);
+  const requests = requestPayloads.get(run) ?? [];
+  requests.push({ method, params });
+  requestPayloads.set(run, requests);
+}
+
+function isOfficialFixture(fixture) {
+  return fixture.backend === BACKEND_PROFILES.official.id;
 }
 
 function nodeList(size) {
@@ -48,7 +92,7 @@ function nodeList(size) {
   }));
 }
 
-function report(index, sequence) {
+function legacyReport(index, sequence) {
   return {
     online: true,
     cpu: { usage: (index + sequence) % 100 },
@@ -69,19 +113,144 @@ function report(index, sequence) {
   };
 }
 
+// Upstream's common:getNodesLatestStatus intentionally returns a flat report
+// map instead of the fork's nested RealtimeDelta shape. Keep the fixture on
+// that wire format so this gate exercises the actual normalizer.
+function officialLatestStatus(index, sequence) {
+  return {
+    online: true,
+    cpu: (index + sequence) % 100,
+    ram: 536_870_912 + ((index + sequence) % 100) * 1_048_576,
+    ram_total: 2_147_483_648,
+    swap: 0,
+    swap_total: 0,
+    disk: 5_368_709_120,
+    disk_total: 21_474_836_480,
+    load: 0.5,
+    load5: 0.4,
+    load15: 0.3,
+    net_in: sequence * 120 + index,
+    net_out: sequence * 100 + index,
+    net_total_up: sequence * 1_000 + index,
+    net_total_down: sequence * 2_000 + index,
+    connections: 12,
+    connections_udp: 2,
+    uptime: sequence,
+    process: 20,
+    time: 1_700_000_000 + sequence,
+  };
+}
+
+function toIsoOrNow(value) {
+  const date = typeof value === "string" || typeof value === "number" ? new Date(value) : new Date();
+  return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+}
+
+function requestedEntityIds(params, fixture) {
+  const value = Array.isArray(params?.entity_ids) ? params.entity_ids : [];
+  const allowed = new Set(nodeList(fixture.nodes).map((node) => node.uuid));
+  const ids = value.filter((uuid) => typeof uuid === "string" && allowed.has(uuid));
+  return ids.length > 0 ? ids : nodeList(fixture.nodes).map((node) => node.uuid);
+}
+
+function officialPingMetricSeries(params, fixture) {
+  const metricKeys = Array.isArray(params?.metric_keys) ? params.metric_keys : [];
+  const entityIds = requestedEntityIds(params, fixture);
+  const end = new Date(toIsoOrNow(params?.end)).getTime();
+  const start = new Date(toIsoOrNow(params?.start)).getTime();
+  const windowStart = Number.isFinite(start) && start < end ? start : end - 3_600_000;
+  const pointCount = Math.max(1, Math.min(24, Number(params?.max_points) || 24));
+  const series = [];
+
+  for (const metricKey of metricKeys) {
+    if (metricKey !== "ping.latency_ms" && metricKey !== "ping.loss") continue;
+    for (const [index, uuid] of entityIds.entries()) {
+      const points = Array.from({ length: pointCount }, (_, point) => {
+        const fraction = pointCount === 1 ? 1 : point / (pointCount - 1);
+        const hasLoss = point === Math.floor(pointCount / 2);
+        const count = hasLoss ? 2 : 1;
+        return {
+          time: new Date(windowStart + (end - windowStart) * fraction).toISOString(),
+          value: metricKey === "ping.latency_ms"
+            ? 20 + ((index + point) % 30)
+            : hasLoss ? 0.5 : 0,
+          count,
+          tags: { task_id: "1" },
+        };
+      });
+      series.push({
+        metric_key: metricKey,
+        entity_id: uuid,
+        tags: { task_id: "1" },
+        points,
+      });
+    }
+  }
+
+  return {
+    start: new Date(windowStart).toISOString(),
+    end: new Date(end).toISOString(),
+    series,
+    count: series.length,
+  };
+}
+
+function officialPingStats(params, fixture) {
+  const entityIds = requestedEntityIds(params, fixture);
+  const start = toIsoOrNow(params?.start);
+  const end = toIsoOrNow(params?.end);
+  return {
+    start,
+    end,
+    stats: entityIds.map((uuid, index) => ({
+      entity_id: uuid,
+      task_id: "1",
+      name: "edge",
+      type: "icmp",
+      interval: 60,
+      total: 60,
+      valid: 59,
+      loss: 1.67,
+      loss_approximate: false,
+      min: 10,
+      max: 80,
+      avg: 25 + (index % 3),
+      latest: 20 + (index % 30),
+      p99_p50_ratio: 1.2,
+    })),
+    count: entityIds.length,
+  };
+}
+
 function sendJson(response, body) {
   response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   response.end(JSON.stringify(body));
 }
 
+function sendRpcResult(response, id, result) {
+  sendJson(response, { jsonrpc: "2.0", id, result });
+}
+
+function sendRpcMethodMissing(response, id, method) {
+  sendJson(response, {
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32601, message: `method not found: ${method}` },
+  });
+}
+
 const server = createServer(async (request, response) => {
+  // Capture the immutable fixture at request start. A navigation can switch
+  // profiles while an older long-poll is still unwinding; it must not be
+  // counted against, or answered as, the next profile's run.
+  const fixture = activeFixture;
   const url = new URL(request.url ?? "/", "http://fixture.local");
   if (url.pathname === "/api/nodes") {
-    count("nodes");
-    return sendJson(response, nodeList(activeFixture.nodes));
+    count("nodes", fixture.run);
+    return sendJson(response, nodeList(fixture.nodes));
   }
   if (url.pathname === "/api/public") {
-    count("public");
+    count("public", fixture.run);
     return sendJson(response, {
       sitename: "Komari Scale Gate",
       theme: "LuminaPlus",
@@ -89,49 +258,93 @@ const server = createServer(async (request, response) => {
         showHomeOverview: false,
         showGroupTabs: false,
         desktopNodeViewMode: "compact",
-        homepagePingBindings: { "1": nodeList(activeFixture.nodes).map((node) => node.uuid) },
+        homepagePingBindings: { "1": nodeList(fixture.nodes).map((node) => node.uuid) },
       },
     });
   }
   if (url.pathname === "/api/me") {
-    count("me");
+    count("me", fixture.run);
     return sendJson(response, { logged_in: false, username: "", uuid: "" });
   }
   if (url.pathname === "/api/rpc2" && request.method === "POST") {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    count(`rpc:${payload.method}`);
-    let result = {};
+    recordRpcRequest(fixture.run, payload.method, payload.params);
+
+    if (isOfficialFixture(fixture)) {
+      if (payload.method === "rpc.discover") {
+        return sendRpcMethodMissing(response, payload.id, payload.method);
+      }
+      if (payload.method === "rpc.methods") {
+        return sendRpcResult(response, payload.id, [
+          "common:getNodesLatestStatus",
+          "public:getPublicPingTasks",
+          "public:queryMetrics",
+          "public:getPingMetricStats",
+        ]);
+      }
+      if (payload.method === "common:getNodesLatestStatus") {
+        const reports = Object.fromEntries(
+          Array.from({ length: fixture.nodes }, (_, index) => [
+            `node-${index}`,
+            officialLatestStatus(index, 1),
+          ]),
+        );
+        return sendRpcResult(response, payload.id, reports);
+      }
+      if (payload.method === "public:getPublicPingTasks") {
+        return sendRpcResult(response, payload.id, [{
+          id: 1,
+          weight: 1,
+          name: "edge",
+          clients: nodeList(fixture.nodes).map((node) => node.uuid),
+          default_on: true,
+          type: "icmp",
+          interval: 60,
+        }]);
+      }
+      if (payload.method === "public:queryMetrics") {
+        return sendRpcResult(response, payload.id, officialPingMetricSeries(payload.params, fixture));
+      }
+      if (payload.method === "public:getPingMetricStats") {
+        return sendRpcResult(response, payload.id, officialPingStats(payload.params, fixture));
+      }
+      return sendRpcMethodMissing(response, payload.id, payload.method);
+    }
+
     if (payload.method === "rpc.discover") {
-      result = {
+      return sendRpcResult(response, payload.id, {
         jsonrpc_version: "2.0",
         contract: "komari.rpc.v2.4",
         methods: ["common:getRealtimeDelta", "common:getPingOverview"],
         capabilities: { "realtime.delta": "1", "ping.overview": "2" },
-      };
-    } else if (payload.method === "common:getRealtimeDelta") {
+      });
+    }
+    if (payload.method === "common:getRealtimeDelta") {
       const since = Number(payload.params?.since ?? 0);
       const sequence = since + 1;
       const reports = {};
-      if (since === 0 || (activeFixture.soak && since < 1_800)) {
-        for (let index = 0; index < activeFixture.nodes; index += 1) {
-          reports[`node-${index}`] = report(index, sequence);
+      if (since === 0 || (fixture.soak && since < 1_800)) {
+        for (let index = 0; index < fixture.nodes; index += 1) {
+          reports[`node-${index}`] = legacyReport(index, sequence);
         }
       }
-      result = {
+      const result = {
         sequence,
         snapshot: since === 0,
         reports,
-        online: since === 0 ? nodeList(activeFixture.nodes).map((node) => node.uuid) : undefined,
+        online: since === 0 ? nodeList(fixture.nodes).map((node) => node.uuid) : undefined,
       };
-      if (!activeFixture.soak && since > 0) await new Promise((resolve) => setTimeout(resolve, 250));
-      if (activeFixture.soak && since >= 1_800) await new Promise((resolve) => setTimeout(resolve, 250));
-    } else if (payload.method === "common:getPingOverview") {
+      if (!fixture.soak && since > 0) await new Promise((resolve) => setTimeout(resolve, 250));
+      if (fixture.soak && since >= 1_800) await new Promise((resolve) => setTimeout(resolve, 250));
+      return sendRpcResult(response, payload.id, result);
+    }
+    if (payload.method === "common:getPingOverview") {
       const to = Math.floor(Date.now() / 1_000);
       const stats = {};
       const series = {};
-      for (let index = 0; index < activeFixture.nodes; index += 1) {
+      for (let index = 0; index < fixture.nodes; index += 1) {
         const uuid = `node-${index}`;
         stats[uuid] = { "1": { name: "edge", total: 60, lost: 1, latest: 20 + (index % 30), avg: 25, tail: 0.2, loss: 1.67, min: 10, max: 80 } };
         series[uuid] = { "1": Array.from({ length: 24 }, (_, point) => ({
@@ -142,9 +355,15 @@ const server = createServer(async (request, response) => {
           loss: point === 11 ? 50 : 0,
         })) };
       }
-      result = { from: to - 3_600, to, tasks: [{ id: 1, name: "edge", type: "icmp", interval: 60 }], stats, series };
+      return sendRpcResult(response, payload.id, {
+        from: to - 3_600,
+        to,
+        tasks: [{ id: 1, name: "edge", type: "icmp", interval: 60 }],
+        stats,
+        series,
+      });
     }
-    return sendJson(response, { jsonrpc: "2.0", id: payload.id, result });
+    return sendRpcMethodMissing(response, payload.id, payload.method);
   }
 
   const requested = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
@@ -242,6 +461,97 @@ async function waitUntil(cdp, expression, timeoutMs) {
   throw new Error(`browser condition timed out: ${expression}; ${JSON.stringify(diagnostics)}`);
 }
 
+function failGate(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function rpcRequests(run, method) {
+  return (requestPayloads.get(run) ?? []).filter((entry) => entry.method === method);
+}
+
+function assertNoRpcRequests(run, profileLabel, methods) {
+  const requests = requestPayloads.get(run) ?? [];
+  for (const method of methods) {
+    const countForMethod = requests.filter((entry) => entry.method === method).length;
+    failGate(
+      countForMethod === 0,
+      `${profileLabel} made incompatible RPC call ${method} (${countForMethod}x)`,
+    );
+  }
+}
+
+function assertOneNodeBatch(run, profileLabel, method, paramKey, nodes) {
+  const requests = rpcRequests(run, method);
+  failGate(
+    requests.length === 1,
+    `${profileLabel} expected one batched ${method} request, got ${requests.length}`,
+  );
+  const ids = requests[0]?.params?.[paramKey];
+  failGate(
+    Array.isArray(ids),
+    `${profileLabel} ${method} did not send ${paramKey} as an array`,
+  );
+  const expected = new Set(Array.from({ length: nodes }, (_, index) => `node-${index}`));
+  const actual = new Set(ids);
+  failGate(
+    actual.size === expected.size && [...expected].every((uuid) => actual.has(uuid)),
+    `${profileLabel} ${method} was not a complete ${nodes}-node batch`,
+  );
+}
+
+function assertLegacyRequestProfile(run, nodes) {
+  const profileLabel = BACKEND_PROFILES.legacy.label;
+  const counts = requestCounts.get(run) ?? {};
+  if ((counts.nodes ?? 0) !== 1) {
+    throw new Error(`${profileLabel} ${nodes}-node /api/nodes count=${counts.nodes ?? 0}`);
+  }
+  if ((counts["rpc:common:getPingOverview"] ?? 0) > 1) {
+    throw new Error(`${profileLabel} ${nodes}-node Ping overview fanned out`);
+  }
+  assertNoRpcRequests(run, profileLabel, OFFICIAL_ONLY_RPC_METHODS);
+}
+
+function assertOfficialRequestProfile(run, nodes) {
+  const profileLabel = BACKEND_PROFILES.official.label;
+  const counts = requestCounts.get(run) ?? {};
+  if ((counts.nodes ?? 0) !== 1) {
+    throw new Error(`${profileLabel} ${nodes}-node /api/nodes count=${counts.nodes ?? 0}`);
+  }
+
+  // The failed discovery probe is required by capability negotiation. After
+  // it, all data must come from upstream's batch current-status/metric APIs.
+  failGate(
+    rpcRequests(run, "rpc.discover").length === 1,
+    `${profileLabel} expected one rpc.discover negotiation probe`,
+  );
+  failGate(
+    rpcRequests(run, "rpc.methods").length === 1,
+    `${profileLabel} expected one rpc.methods capability request`,
+  );
+  assertOneNodeBatch(run, profileLabel, "common:getNodesLatestStatus", "uuids", nodes);
+  assertOneNodeBatch(run, profileLabel, "public:queryMetrics", "entity_ids", nodes);
+  assertOneNodeBatch(run, profileLabel, "public:getPingMetricStats", "entity_ids", nodes);
+  failGate(
+    rpcRequests(run, "public:getPublicPingTasks").length === 1,
+    `${profileLabel} expected one public:getPublicPingTasks request`,
+  );
+
+  const metricParams = rpcRequests(run, "public:queryMetrics")[0]?.params ?? {};
+  const metricKeys = metricParams.metric_keys;
+  failGate(
+    Array.isArray(metricKeys) &&
+      metricKeys.includes("ping.latency_ms") &&
+      metricKeys.includes("ping.loss") &&
+      Number(metricParams.max_points) === 24,
+    `${profileLabel} Ping metric request did not use the shared 24-point trend batch`,
+  );
+  failGate(
+    Number(rpcRequests(run, "public:getPingMetricStats")[0]?.params?.max_points) === 24,
+    `${profileLabel} Ping statistics request did not use the shared 24-point trend batch`,
+  );
+  assertNoRpcRequests(run, profileLabel, LEGACY_ONLY_RPC_METHODS);
+}
+
 const results = [];
 let cdp;
 try {
@@ -251,14 +561,18 @@ try {
   await cdp.call("Runtime.enable");
   await cdp.call("HeapProfiler.enable");
 
-  for (const [nodes, budgetMs] of [[30, 4_000], [300, 6_000], [1_000, 12_000]]) {
-    const run = `scale-${nodes}`;
-    activeFixture = { nodes, soak: false, run };
-    requestCounts.set(run, {});
-    await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/?fixture=${nodes}` });
-    await waitUntil(cdp, `document.querySelectorAll('.home-node-card-slot').length === ${nodes}`, budgetMs);
-    await waitUntil(cdp, "document.querySelectorAll('.ping-task-sparkline-line').length > 0", budgetMs);
-    const metrics = await cdp.value(`(() => ({
+  for (const backend of Object.values(BACKEND_PROFILES)) {
+    for (const [nodes, budgetMs] of [[30, 4_000], [300, 6_000], [1_000, 12_000]]) {
+      const run = `${backend.id}-scale-${nodes}`;
+      activeFixture = { backend: backend.id, nodes, soak: false, run };
+      requestCounts.set(run, {});
+      requestPayloads.set(run, []);
+      await cdp.call("Page.navigate", {
+        url: `http://127.0.0.1:${address.port}/?fixture=${nodes}&backend=${backend.id}`,
+      });
+      await waitUntil(cdp, `document.querySelectorAll('.home-node-card-slot').length === ${nodes}`, budgetMs);
+      await waitUntil(cdp, "document.querySelectorAll('.ping-task-sparkline-line').length > 0", budgetMs);
+      const metrics = await cdp.value(`(() => ({
       renderMs: performance.now(),
       cards: document.querySelectorAll('.home-node-card-slot').length,
       canvases: document.querySelectorAll('canvas').length,
@@ -268,41 +582,48 @@ try {
       contentVisibility: getComputedStyle(document.querySelector('.home-node-card-slot')).contentVisibility,
       bodyWidth: document.body.scrollWidth
     }))()`);
-    if (metrics.renderMs > budgetMs) throw new Error(`${nodes}-node render ${metrics.renderMs}ms > ${budgetMs}ms`);
-    if (nodes >= 300 && metrics.contentVisibility !== "auto") {
-      throw new Error(`${nodes}-node browser card virtualization is disabled`);
+      if (metrics.renderMs > budgetMs) throw new Error(`${backend.label} ${nodes}-node render ${metrics.renderMs}ms > ${budgetMs}ms`);
+      if (nodes >= 300 && metrics.contentVisibility !== "auto") {
+        throw new Error(`${backend.label} ${nodes}-node browser card virtualization is disabled`);
+      }
+      if (nodes >= 300 && metrics.canvases > 0 && metrics.activeCanvases >= metrics.canvases) {
+        throw new Error(`${backend.label} ${nodes}-node browser did not suspend offscreen canvases`);
+      }
+      if (metrics.pingTrendLines === 0 || metrics.emptyPingTrends !== 0) {
+        throw new Error(`${backend.label} ${nodes}-node Ping trend regression: lines=${metrics.pingTrendLines}, empty=${metrics.emptyPingTrends}`);
+      }
+      if (backend === BACKEND_PROFILES.legacy) assertLegacyRequestProfile(run, nodes);
+      else assertOfficialRequestProfile(run, nodes);
+      results.push({ backend: backend.id, nodes, ...metrics, requests: requestCounts.get(run) ?? {} });
     }
-    if (nodes >= 300 && metrics.canvases > 0 && metrics.activeCanvases >= metrics.canvases) {
-      throw new Error(`${nodes}-node browser did not suspend offscreen canvases`);
-    }
-    if (metrics.pingTrendLines === 0 || metrics.emptyPingTrends !== 0) {
-      throw new Error(`${nodes}-node Ping trend regression: lines=${metrics.pingTrendLines}, empty=${metrics.emptyPingTrends}`);
-    }
-    const counts = requestCounts.get(run) ?? {};
-    if ((counts.nodes ?? 0) !== 1) throw new Error(`${nodes}-node /api/nodes count=${counts.nodes ?? 0}`);
-    if ((counts["rpc:common:getPingOverview"] ?? 0) > 1) throw new Error(`${nodes}-node Ping overview fanned out`);
-    if (counts["rpc:common:getNodesLatestStatus"]) throw new Error(`${nodes}-node legacy status poll was used`);
-    results.push({ nodes, ...metrics, requests: counts });
   }
 
-  activeFixture = { nodes: 30, soak: true, run: "soak-30" };
+  const soakRun = `${BACKEND_PROFILES.legacy.id}-soak-30`;
+  activeFixture = {
+    backend: BACKEND_PROFILES.legacy.id,
+    nodes: 30,
+    soak: true,
+    run: soakRun,
+  };
   requestCounts.set(activeFixture.run, {});
-  await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/?fixture=30&soak=1` });
+  requestPayloads.set(activeFixture.run, []);
+  await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/?fixture=30&soak=1&backend=${BACKEND_PROFILES.legacy.id}` });
   await waitUntil(cdp, "document.querySelectorAll('.home-node-card-slot').length === 30", 4_000);
   await cdp.call("HeapProfiler.collectGarbage");
   const heapBefore = await cdp.call("Runtime.getHeapUsage");
   const soakDeadline = Date.now() + 15_000;
-  while ((requestCounts.get("soak-30")?.["rpc:common:getRealtimeDelta"] ?? 0) < 1_800 && Date.now() < soakDeadline) {
+  while ((requestCounts.get(soakRun)?.["rpc:common:getRealtimeDelta"] ?? 0) < 1_800 && Date.now() < soakDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  if ((requestCounts.get("soak-30")?.["rpc:common:getRealtimeDelta"] ?? 0) < 1_800) {
+  if ((requestCounts.get(soakRun)?.["rpc:common:getRealtimeDelta"] ?? 0) < 1_800) {
     throw new Error("browser soak did not finish");
   }
   await cdp.call("HeapProfiler.collectGarbage");
   const heapAfter = await cdp.call("Runtime.getHeapUsage");
   const heapGrowth = heapAfter.usedSize - heapBefore.usedSize;
   if (heapGrowth > 16 * 1024 * 1024) throw new Error(`browser soak heap grew ${heapGrowth} bytes`);
-  results.push({ soakTicks: 1_800, heapBefore: heapBefore.usedSize, heapAfter: heapAfter.usedSize, heapGrowth });
+  assertLegacyRequestProfile(soakRun, 30);
+  results.push({ backend: BACKEND_PROFILES.legacy.id, soakTicks: 1_800, heapBefore: heapBefore.usedSize, heapAfter: heapAfter.usedSize, heapGrowth });
 
   console.log(JSON.stringify(results, null, 2));
 } finally {

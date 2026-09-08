@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "official-v1.4",
+  "label": "Official Komari 1.4.3",
+  "source": {
+    "repository": "https://github.com/komari-monitor/komari",
+    "release": "v1.4.3"
+  },
+  "discovery": {
+    "method": "rpc.methods",
+    "params": {
+      "internal": true
+    },
+    "response": {
+      "type": "string[]"
+    }
+  },
+  "required_methods": [
+    "rpc.methods",
+    "common:getNodesLatestStatus",
+    "public:getPublicPingTasks",
+    "public:queryMetrics",
+    "public:getPingMetricStats"
+  ]
+}
