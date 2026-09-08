@@ -49,6 +49,12 @@ const OFFICIAL_ONLY_RPC_METHODS = [
   "public:queryMetrics",
   "public:getPingMetricStats",
 ];
+// The 1,800-request soak intentionally exercises the long-poll lifecycle,
+// not a local-machine speed benchmark. GitHub hosted runners can take much
+// longer than a desktop to schedule every React/network turn, so give the
+// same workload a portable completion window instead of weakening the check.
+const SOAK_TICK_TARGET = 1_800;
+const SOAK_TIMEOUT_MS = 60_000;
 
 let activeFixture = {
   backend: BACKEND_PROFILES.legacy.id,
@@ -335,7 +341,7 @@ const server = createServer(async (request, response) => {
       const since = Number(payload.params?.since ?? 0);
       const sequence = since + 1;
       const reports = {};
-      if (since === 0 || (fixture.soak && since < 1_800)) {
+      if (since === 0 || (fixture.soak && since < SOAK_TICK_TARGET)) {
         for (let index = 0; index < fixture.nodes; index += 1) {
           reports[`node-${index}`] = legacyReport(index, sequence);
         }
@@ -347,7 +353,7 @@ const server = createServer(async (request, response) => {
         online: since === 0 ? nodeList(fixture.nodes).map((node) => node.uuid) : undefined,
       };
       if (!fixture.soak && since > 0) await new Promise((resolve) => setTimeout(resolve, 250));
-      if (fixture.soak && since >= 1_800) await new Promise((resolve) => setTimeout(resolve, 250));
+      if (fixture.soak && since >= SOAK_TICK_TARGET) await new Promise((resolve) => setTimeout(resolve, 250));
       return sendRpcResult(response, payload.id, result);
     }
     if (payload.method === "common:getPingOverview") {
@@ -633,19 +639,20 @@ try {
   await waitUntil(cdp, "document.querySelectorAll('.home-node-card-slot').length === 30", 4_000);
   await cdp.call("HeapProfiler.collectGarbage");
   const heapBefore = await cdp.call("Runtime.getHeapUsage");
-  const soakDeadline = Date.now() + 15_000;
-  while ((requestCounts.get(soakRun)?.["rpc:common:getRealtimeDelta"] ?? 0) < 1_800 && Date.now() < soakDeadline) {
+  const soakDeadline = Date.now() + SOAK_TIMEOUT_MS;
+  while ((requestCounts.get(soakRun)?.["rpc:common:getRealtimeDelta"] ?? 0) < SOAK_TICK_TARGET && Date.now() < soakDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  if ((requestCounts.get(soakRun)?.["rpc:common:getRealtimeDelta"] ?? 0) < 1_800) {
-    throw new Error("browser soak did not finish");
+  const completedSoakTicks = requestCounts.get(soakRun)?.["rpc:common:getRealtimeDelta"] ?? 0;
+  if (completedSoakTicks < SOAK_TICK_TARGET) {
+    throw new Error(`browser soak did not finish: ${completedSoakTicks}/${SOAK_TICK_TARGET} long-poll turns in ${SOAK_TIMEOUT_MS}ms`);
   }
   await cdp.call("HeapProfiler.collectGarbage");
   const heapAfter = await cdp.call("Runtime.getHeapUsage");
   const heapGrowth = heapAfter.usedSize - heapBefore.usedSize;
   if (heapGrowth > 16 * 1024 * 1024) throw new Error(`browser soak heap grew ${heapGrowth} bytes`);
   assertLegacyRequestProfile(soakRun, 30);
-  results.push({ backend: BACKEND_PROFILES.legacy.id, soakTicks: 1_800, heapBefore: heapBefore.usedSize, heapAfter: heapAfter.usedSize, heapGrowth });
+  results.push({ backend: BACKEND_PROFILES.legacy.id, soakTicks: SOAK_TICK_TARGET, heapBefore: heapBefore.usedSize, heapAfter: heapAfter.usedSize, heapGrowth });
 
   console.log(JSON.stringify(results, null, 2));
 } finally {
