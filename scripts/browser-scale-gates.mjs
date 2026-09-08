@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createReadStream, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { spawn } from "node:child_process";
@@ -55,6 +55,11 @@ const OFFICIAL_ONLY_RPC_METHODS = [
 // same workload a portable completion window instead of weakening the check.
 const SOAK_TICK_TARGET = 1_800;
 const SOAK_TIMEOUT_MS = 60_000;
+// Startup is separate from the render/soak budgets. Hosted Linux runners may
+// emit harmless DBus diagnostics and take several seconds before Chromium
+// writes its DevTools endpoint, so wait for the actual endpoint rather than
+// interpreting stderr as a startup signal.
+const DEVTOOLS_STARTUP_TIMEOUT_MS = 30_000;
 
 let activeFixture = {
   backend: BACKEND_PROFILES.legacy.id,
@@ -397,7 +402,6 @@ const server = createServer(async (request, response) => {
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address();
 if (!address || typeof address === "string") throw new Error("fixture server did not bind TCP");
-const browserPort = 10_000 + Math.floor(Math.random() * 40_000);
 const profile = mkdtempSync(join(tmpdir(), "lumina-browser-gate-"));
 const child = spawn(chrome, [
   "--headless=new",
@@ -405,26 +409,63 @@ const child = spawn(chrome, [
   "--no-default-browser-check",
   "--disable-background-networking",
   "--disable-component-update",
+  "--disable-dev-shm-usage",
   "--disable-sync",
-  `--remote-debugging-port=${browserPort}`,
+  "--remote-debugging-address=127.0.0.1",
+  // Let Chromium select an unused port. It writes that port to
+  // DevToolsActivePort in this isolated profile, avoiding a flaky random-port
+  // collision on parallel CI jobs.
+  "--remote-debugging-port=0",
   `--user-data-dir=${profile}`,
   "about:blank",
 ], { stdio: ["ignore", "ignore", "pipe"] });
 let chromeErrors = "";
+let chromeExit = null;
+let chromeLaunchError = null;
 child.stderr.on("data", (chunk) => { chromeErrors += chunk.toString(); });
+child.once("exit", (code, signal) => { chromeExit = { code, signal }; });
+child.once("error", (error) => { chromeLaunchError = error; });
+
+function readDevToolsPort() {
+  try {
+    const [rawPort] = readFileSync(join(profile, "DevToolsActivePort"), "utf8").trim().split(/\r?\n/, 1);
+    const port = Number(rawPort);
+    return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
+  } catch {
+    return null;
+  }
+}
 
 async function waitForDebugger() {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + DEVTOOLS_STARTUP_TIMEOUT_MS;
+  let port = null;
+  while (Date.now() < deadline) {
+    if (chromeLaunchError) {
+      throw new Error(`Chrome could not start: ${chromeLaunchError.message}`);
+    }
+    if (chromeExit) {
+      const exit = chromeExit.code ?? chromeExit.signal ?? "unknown";
+      throw new Error(`Chrome exited before DevTools started (${exit}): ${chromeErrors.slice(-1_000)}`);
+    }
+    port ??= readDevToolsPort();
+    if (!port) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      continue;
+    }
     try {
-      const pages = await fetch(`http://127.0.0.1:${browserPort}/json/list`).then((result) => result.json());
+      const pages = await fetch(`http://127.0.0.1:${port}/json/list`, {
+        signal: AbortSignal.timeout(1_000),
+      }).then((result) => result.json());
       const page = pages.find((item) => item.type === "page" && !String(item.url).startsWith("chrome-extension:"));
       if (page?.webSocketDebuggerUrl) return page.webSocketDebuggerUrl;
     } catch {
-      // Chrome is still starting.
+      // Chromium has written the port but has not exposed a page yet.
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`Chrome DevTools did not start: ${chromeErrors.slice(-1_000)}`);
+  throw new Error(
+    `Chrome DevTools did not start within ${DEVTOOLS_STARTUP_TIMEOUT_MS}ms (port ${port ?? "not written"}): ${chromeErrors.slice(-1_000)}`,
+  );
 }
 
 class CDP {
@@ -657,8 +698,18 @@ try {
   console.log(JSON.stringify(results, null, 2));
 } finally {
   cdp?.close();
-  child.kill("SIGTERM");
-  await new Promise((resolve) => child.once("exit", resolve));
+  if (!chromeExit) {
+    await new Promise((resolve) => {
+      const onExit = () => resolve();
+      child.once("exit", onExit);
+      if (chromeExit) {
+        child.off("exit", onExit);
+        resolve();
+        return;
+      }
+      child.kill("SIGTERM");
+    });
+  }
   server.close();
   rmSync(profile, { recursive: true, force: true });
 }
