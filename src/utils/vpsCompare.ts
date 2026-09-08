@@ -13,7 +13,7 @@ import {
   normalizeHomepagePingTaskBindings,
   type HomepagePingTaskBindings,
 } from "@/utils/pingTasks";
-import { isLostPingSample, isValidPingLatency } from "@/utils/pingSamples";
+import { getPingRecordSampleCounts, isValidPingLatency } from "@/utils/pingSamples";
 import { buildPingTaskVpsCompareUrl } from "@/utils/pingCompareLink";
 
 export type ComparisonMetricKey =
@@ -559,17 +559,10 @@ function buildPingPoints(metric: ComparisonMetricDefinition, records: PingRecord
       latencySum: 0,
       latencyCount: 0,
     };
-    const total = Number.isFinite(record.sample_count) && record.sample_count != null
-      ? Math.max(1, Math.round(record.sample_count))
-      : 1;
-    const explicitLossCount = Number.isFinite(record.loss_count) && record.loss_count != null
-      ? Math.max(0, Math.min(total, Math.round(record.loss_count)))
-      : null;
-    const lost = explicitLossCount ?? (isLostPingSample(record.value) ? total : 0);
+    const { total, lost, valid } = getPingRecordSampleCounts(record);
     const lossRate = Number.isFinite(record.loss_rate) && record.loss_rate != null
       ? Math.max(0, Math.min(1, record.loss_rate))
       : lost / total;
-    const valid = Math.max(0, total - lost);
     bucket.total += total;
     bucket.lost += lost;
     bucket.weightedLoss += lossRate * total;

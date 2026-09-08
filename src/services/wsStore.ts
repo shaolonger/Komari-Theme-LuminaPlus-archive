@@ -892,6 +892,73 @@ export function runRealtimeScaleFixture(nodeCount: number, ticks: number) {
   }
 }
 
+/**
+ * Focused protocol fixture for the upstream current-status API. Unlike the
+ * scale fixture, each input is a complete snapshot: a missing UUID must be
+ * reconciled to offline while an explicit `online:false` record retains its
+ * last report. It exercises the exact production merge and trend-clear paths.
+ */
+export function runOfficialSnapshotFixture(
+  nodeUuids: string[],
+  snapshots: Array<Record<string, unknown>>,
+) {
+  const originalState = state;
+  const originalVersion = storeVersion;
+  const order = Array.from(new Set(nodeUuids.filter(Boolean)));
+  const metaByUuid: Record<string, NodeInfo> = {};
+  const metricsByUuid: Record<string, NodeMetrics> = {};
+  const trafficTrends: Record<string, NodeTrafficTrend> = {};
+
+  for (const [index, uuid] of order.entries()) {
+    const meta = {
+      uuid,
+      name: `Official fixture ${index}`,
+      group: "",
+      region: "",
+      hidden: false,
+      mem_total: 1_000,
+      swap_total: 0,
+      disk_total: 2_000,
+      weight: index,
+    } as NodeInfo;
+    metaByUuid[uuid] = meta;
+    metricsByUuid[uuid] = emptyMetrics(meta, null);
+    trafficTrends[uuid] = EMPTY_TRAFFIC_TREND;
+  }
+
+  state = {
+    metaByUuid,
+    metricsByUuid,
+    trafficTrends,
+    order,
+    failureStreak: 0,
+  };
+
+  try {
+    for (const [index, reports] of snapshots.entries()) {
+      commitRealtimeDelta({
+        sequence: index + 1,
+        snapshot: true,
+        reports,
+      });
+    }
+    return Object.fromEntries(order.map((uuid) => [uuid, {
+      metrics: { ...state.metricsByUuid[uuid] },
+      trends: {
+        up: [...(state.trafficTrends[uuid]?.snapshot.up ?? [])],
+        down: [...(state.trafficTrends[uuid]?.snapshot.down ?? [])],
+      },
+    }]));
+  } finally {
+    state = originalState;
+    storeVersion = originalVersion;
+    visibleNodeUuidsSnapshotVersion = -1;
+    visibleNodeUuidsWithHiddenSnapshotVersion = -1;
+    allNodeMetaSnapshotVersion = -1;
+    homeNodeSummariesSnapshotVersion = -1;
+  }
+}
+
 function waitForRealtimeRetry(signal: AbortSignal, delay: number) {
   return new Promise<void>((resolve) => {
     if (signal.aborted) return resolve();

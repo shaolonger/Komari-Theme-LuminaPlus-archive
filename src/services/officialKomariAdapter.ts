@@ -99,6 +99,22 @@ const OFFICIAL_PING_LOSS_METRIC = "ping.loss";
 
 const ALL_OFFICIAL_LOAD_METRICS = Object.values(OFFICIAL_LOAD_METRICS);
 
+// `net.total.*` is a counter snapshot, not an interval measurement.  The
+// upstream compatibility reader deliberately uses `last` for these two
+// metrics, so do the same when reconstructing the theme's historical records.
+const OFFICIAL_LOAD_AGGREGATION_BY_METRIC: Readonly<Record<string, string>> = {
+  [OFFICIAL_LOAD_METRICS.netTotalUp]: "last",
+  [OFFICIAL_LOAD_METRICS.netTotalDown]: "last",
+};
+
+// Ping latency uses an arithmetic mean below so a rollup keeps a useful trend.
+// A failed probe is stored upstream as latency `-1`; paired `ping.loss` values
+// let `resolvePingBucket` remove that sentinel from the displayed mean.
+const OFFICIAL_PING_AGGREGATION_BY_METRIC: Readonly<Record<string, string>> = {
+  [OFFICIAL_PING_LATENCY_METRIC]: "avg",
+  [OFFICIAL_PING_LOSS_METRIC]: "avg",
+};
+
 function uniqueUuids(uuids: string[]) {
   return Array.from(new Set(uuids.filter(Boolean)));
 }
@@ -196,6 +212,7 @@ async function queryOfficialMetrics({
   window,
   maxPoints,
   fillEmpty,
+  aggregationByMetric,
   options,
 }: {
   metricKeys: string[];
@@ -203,8 +220,15 @@ async function queryOfficialMetrics({
   window: { start: Date; end: Date };
   maxPoints: number;
   fillEmpty: boolean;
+  aggregationByMetric?: Readonly<Record<string, string>>;
   options?: OfficialCallOptions;
 }) {
+  const scopedAggregationByMetric = Object.fromEntries(
+    metricKeys.flatMap((metricKey) => {
+      const aggregation = aggregationByMetric?.[metricKey];
+      return aggregation ? [[metricKey, aggregation]] : [];
+    }),
+  );
   return await callOfficial(
     "public:queryMetrics",
     {
@@ -215,6 +239,9 @@ async function queryOfficialMetrics({
       max_points: Math.max(1, Math.trunc(maxPoints)),
       aggregation: "avg",
       fill_empty: fillEmpty,
+      ...(Object.keys(scopedAggregationByMetric).length > 0
+        ? { aggregation_by_metric: scopedAggregationByMetric }
+        : {}),
     },
     MetricQueryResponseSchema,
     options,
@@ -347,6 +374,7 @@ export async function getOfficialComparisonLoadRecords({
     window: resolveOfficialMetricWindow(hours, range),
     maxPoints,
     fillEmpty: false,
+    aggregationByMetric: OFFICIAL_LOAD_AGGREGATION_BY_METRIC,
     options,
   });
   const known = new Set(entityIds);
@@ -384,7 +412,7 @@ interface PingBucket {
   latency?: number;
   latencyCount: number;
   loss?: number;
-  lossCount: number;
+  lossSampleCount: number;
 }
 
 function collectPingBuckets(seriesList: OfficialMetricSeries[]) {
@@ -412,7 +440,7 @@ function collectPingBuckets(seriesList: OfficialMetricSeries[]) {
       }
       let bucket = byTime.get(time);
       if (!bucket) {
-        bucket = { time: point.time, latencyCount: 0, lossCount: 0 };
+        bucket = { time: point.time, latencyCount: 0, lossSampleCount: 0 };
         byTime.set(time, bucket);
       }
       const count = toMetricCount(point.count);
@@ -422,7 +450,7 @@ function collectPingBuckets(seriesList: OfficialMetricSeries[]) {
           bucket.latency = point.value;
         }
       } else {
-        bucket.lossCount = Math.max(bucket.lossCount, count);
+        bucket.lossSampleCount = Math.max(bucket.lossSampleCount, count);
         if (point.value != null && Number.isFinite(point.value)) {
           bucket.loss = clampRatio(point.value) ?? undefined;
         }
@@ -432,20 +460,55 @@ function collectPingBuckets(seriesList: OfficialMetricSeries[]) {
   return byNodeTask;
 }
 
-function bucketToPingRecord(uuid: string, taskId: number, bucket: PingBucket): PingRecord | null {
-  const sampleCount = Math.max(bucket.latencyCount, bucket.lossCount);
+interface ResolvedPingBucket {
+  sampleCount: number;
+  lossCount: number;
+  lossRate: number;
+  validCount: number;
+  latency: number;
+}
+
+/**
+ * `ping.latency_ms` stores a failed probe as -1, while `ping.loss` stores the
+ * matching 0/1 indicator.  A rollup's latency average therefore includes the
+ * sentinel.  Given the shared count and loss count we can recover the mean of
+ * successful probes exactly:
+ *
+ *   validAverage = (allSampleAverage * count + lost) / (count - lost)
+ *
+ * This is valid for raw one-sample points too, and avoids presenting a
+ * partially lost `[100, -1]` bucket as a fictitious 49.5 ms latency.
+ */
+function resolvePingBucket(bucket: PingBucket): ResolvedPingBucket | null {
+  const sampleCount = Math.max(bucket.latencyCount, bucket.lossSampleCount);
   if (sampleCount <= 0) return null;
+
   const lossRate = bucket.loss ?? (bucket.latency != null && bucket.latency <= 0 ? 1 : 0);
   const lossCount = Math.max(0, Math.min(sampleCount, Math.round(lossRate * sampleCount)));
-  const value = bucket.latency != null && bucket.latency > 0 ? bucket.latency : -1;
+  const validCount = Math.max(0, sampleCount - lossCount);
+  let latency = -1;
+
+  if (validCount > 0 && bucket.latency != null && Number.isFinite(bucket.latency)) {
+    const successfulAverage = (bucket.latency * sampleCount + lossCount) / validCount;
+    if (Number.isFinite(successfulAverage) && successfulAverage > 0) {
+      latency = successfulAverage;
+    }
+  }
+
+  return { sampleCount, lossCount, lossRate, validCount, latency };
+}
+
+function bucketToPingRecord(uuid: string, taskId: number, bucket: PingBucket): PingRecord | null {
+  const resolved = resolvePingBucket(bucket);
+  if (!resolved) return null;
   return {
     client: uuid,
     task_id: taskId,
     time: bucket.time,
-    value,
-    sample_count: sampleCount,
-    loss_count: lossCount,
-    loss_rate: lossRate,
+    value: resolved.latency,
+    sample_count: resolved.sampleCount,
+    loss_count: resolved.lossCount,
+    loss_rate: resolved.lossRate,
   };
 }
 
@@ -486,6 +549,7 @@ export async function getOfficialComparisonPingRecords({
       window,
       maxPoints,
       fillEmpty: false,
+      aggregationByMetric: OFFICIAL_PING_AGGREGATION_BY_METRIC,
       options,
     }),
   ]);
@@ -524,22 +588,19 @@ function deriveOverviewStat(taskId: number, buckets: Iterable<PingBucket>): Ping
   let latest = -1;
   let latestTime = 0;
   for (const bucket of buckets) {
-    const count = Math.max(bucket.latencyCount, bucket.lossCount);
-    if (count <= 0) continue;
-    const lossRate = bucket.loss ?? (bucket.latency != null && bucket.latency <= 0 ? 1 : 0);
-    const lossCount = Math.max(0, Math.min(count, Math.round(lossRate * count)));
-    total += count;
-    lost += lossCount;
-    if (bucket.latency != null && bucket.latency > 0) {
-      const validCount = Math.max(0, count - lossCount);
-      valid += validCount;
-      weightedLatency += bucket.latency * validCount;
-      min = Math.min(min, bucket.latency);
-      max = Math.max(max, bucket.latency);
+    const resolved = resolvePingBucket(bucket);
+    if (!resolved) continue;
+    total += resolved.sampleCount;
+    lost += resolved.lossCount;
+    if (resolved.latency > 0) {
+      valid += resolved.validCount;
+      weightedLatency += resolved.latency * resolved.validCount;
+      min = Math.min(min, resolved.latency);
+      max = Math.max(max, resolved.latency);
       const time = metricTimeKey(bucket.time);
       if (time >= latestTime) {
         latestTime = time;
-        latest = bucket.latency;
+        latest = resolved.latency;
       }
     }
   }
@@ -575,6 +636,7 @@ export async function getOfficialPingOverviewForNodes(
       // The homepage intentionally has a fixed visual density of 24 trend buckets.
       maxPoints: 24,
       fillEmpty: true,
+      aggregationByMetric: OFFICIAL_PING_AGGREGATION_BY_METRIC,
       options,
     }),
     callOfficial(
@@ -621,16 +683,14 @@ export async function getOfficialPingOverviewForNodes(
       if (!taskById.has(taskId)) taskById.set(taskId, taskFromId(taskId));
       const points = Array.from(byTime.values())
         .map((bucket) => {
-          const count = Math.max(bucket.latencyCount, bucket.lossCount);
-          if (count <= 0) return null;
-          const lossRate = bucket.loss ?? (bucket.latency != null && bucket.latency <= 0 ? 1 : 0);
-          const lossCount = Math.max(0, Math.min(count, Math.round(lossRate * count)));
+          const resolved = resolvePingBucket(bucket);
+          if (!resolved) return null;
           return {
             time: bucket.time,
-            value: bucket.latency != null && bucket.latency > 0 ? bucket.latency : -1,
-            sample_count: count,
-            loss_count: lossCount,
-            loss: lossRate * 100,
+            value: resolved.latency,
+            sample_count: resolved.sampleCount,
+            loss_count: resolved.lossCount,
+            loss: resolved.lossRate * 100,
           };
         })
         .filter((point): point is NonNullable<typeof point> => point != null)

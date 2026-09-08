@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isLostPingSample, isValidPingLatency } from "@/utils/pingSamples";
+import {
+  getPingRecordSampleCounts,
+  isLostPingSample,
+  isValidPingLatency,
+} from "@/utils/pingSamples";
 
 describe("ping sample predicates", () => {
   it("only treats finite positive RTT values as successful ping latency", () => {
@@ -16,5 +20,14 @@ describe("ping sample predicates", () => {
     expect(isLostPingSample(-1)).toBe(true);
     expect(isLostPingSample(Number.NaN)).toBe(true);
     expect(isLostPingSample(12)).toBe(false);
+  });
+
+  it("keeps explicit rollup loss counts instead of inferring loss from the displayed RTT", () => {
+    expect(getPingRecordSampleCounts({ value: 42, sample_count: 20, loss_count: 3 }))
+      .toEqual({ total: 20, lost: 3, valid: 17 });
+    expect(getPingRecordSampleCounts({ value: -1, sample_count: 5 }))
+      .toEqual({ total: 5, lost: 5, valid: 0 });
+    expect(getPingRecordSampleCounts({ value: 8, loss_count: 9 }))
+      .toEqual({ total: 1, lost: 1, valid: 0 });
   });
 });

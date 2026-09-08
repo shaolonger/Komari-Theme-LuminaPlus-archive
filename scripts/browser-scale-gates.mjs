@@ -227,6 +227,10 @@ function sendJson(response, body) {
   response.end(JSON.stringify(body));
 }
 
+function sendOfficialRestEnvelope(response, data) {
+  sendJson(response, { status: "success", message: "ok", data });
+}
+
 function sendRpcResult(response, id, result) {
   sendJson(response, { jsonrpc: "2.0", id, result });
 }
@@ -247,11 +251,14 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://fixture.local");
   if (url.pathname === "/api/nodes") {
     count("nodes", fixture.run);
-    return sendJson(response, nodeList(fixture.nodes));
+    const nodes = nodeList(fixture.nodes);
+    return isOfficialFixture(fixture)
+      ? sendOfficialRestEnvelope(response, nodes)
+      : sendJson(response, nodes);
   }
   if (url.pathname === "/api/public") {
     count("public", fixture.run);
-    return sendJson(response, {
+    const publicConfig = {
       sitename: "Komari Scale Gate",
       theme: "LuminaPlus",
       theme_settings: {
@@ -260,7 +267,10 @@ const server = createServer(async (request, response) => {
         desktopNodeViewMode: "compact",
         homepagePingBindings: { "1": nodeList(fixture.nodes).map((node) => node.uuid) },
       },
-    });
+    };
+    return isOfficialFixture(fixture)
+      ? sendOfficialRestEnvelope(response, publicConfig)
+      : sendJson(response, publicConfig);
   }
   if (url.pathname === "/api/me") {
     count("me", fixture.run);
@@ -461,6 +471,16 @@ async function waitUntil(cdp, expression, timeoutMs) {
   throw new Error(`browser condition timed out: ${expression}; ${JSON.stringify(diagnostics)}`);
 }
 
+// The legacy fixture holds one long-poll request open. Tear down the previous
+// document before switching `activeFixture`, otherwise a late request emitted
+// by the old page can be attributed to the next backend profile and turn a
+// real protocol assertion into a cross-navigation race.
+async function clearFixturePage(cdp) {
+  await cdp.call("Page.navigate", { url: "about:blank" });
+  await waitUntil(cdp, "location.href === 'about:blank'", 2_000);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+
 function failGate(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -564,6 +584,7 @@ try {
   for (const backend of Object.values(BACKEND_PROFILES)) {
     for (const [nodes, budgetMs] of [[30, 4_000], [300, 6_000], [1_000, 12_000]]) {
       const run = `${backend.id}-scale-${nodes}`;
+      await clearFixturePage(cdp);
       activeFixture = { backend: backend.id, nodes, soak: false, run };
       requestCounts.set(run, {});
       requestPayloads.set(run, []);
@@ -599,6 +620,7 @@ try {
   }
 
   const soakRun = `${BACKEND_PROFILES.legacy.id}-soak-30`;
+  await clearFixturePage(cdp);
   activeFixture = {
     backend: BACKEND_PROFILES.legacy.id,
     nodes: 30,

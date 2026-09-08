@@ -119,6 +119,10 @@ describe("official Komari metric adapter", () => {
         end: "2026-01-01T01:00:00.000Z",
         fill_empty: false,
         max_points: 72,
+        aggregation_by_metric: {
+          "net.total.up": "last",
+          "net.total.down": "last",
+        },
       }),
       undefined,
     );
@@ -146,7 +150,9 @@ describe("official Komari metric adapter", () => {
             metric_key: "ping.latency_ms",
             entity_id: "node-a",
             tags: { task_id: "7" },
-            points: [{ time: "2026-01-01T00:10:00.000Z", value: 55, count: 5 }],
+            // Four successful 55ms probes plus one upstream -1 loss sentinel
+            // are stored as an all-sample arithmetic mean of 43.8.
+            points: [{ time: "2026-01-01T00:10:00.000Z", value: 43.8, count: 5 }],
           },
           {
             metric_key: "ping.loss",
@@ -174,6 +180,16 @@ describe("official Komari metric adapter", () => {
       loss_count: 1,
       loss_rate: 0.2,
     });
+    expect(rpcCall).toHaveBeenCalledWith(
+      "public:queryMetrics",
+      expect.objectContaining({
+        aggregation_by_metric: {
+          "ping.latency_ms": "avg",
+          "ping.loss": "avg",
+        },
+      }),
+      undefined,
+    );
 
     const series = buildComparisonSeries({
       metricKey: "ping_loss",
@@ -181,6 +197,61 @@ describe("official Komari metric adapter", () => {
       pingRecords: result.records,
     });
     expect(series[0]?.points[0]?.value).toBe(20);
+  });
+
+  it("keeps same-timestamp metrics for multiple upstream ping tasks separate", async () => {
+    rpcCall.mockImplementation((method: string) => {
+      if (method === "public:getPublicPingTasks") {
+        return Promise.resolve([
+          { id: 3, name: "Transit", clients: ["node-a"], type: "icmp", interval: 60 },
+          { id: 8, name: "Edge", clients: ["node-a"], type: "tcp", interval: 30 },
+        ]);
+      }
+      if (method === "public:queryMetrics") {
+        return Promise.resolve(metricResponse([
+          {
+            metric_key: "ping.latency_ms",
+            entity_id: "node-a",
+            tags: { task_id: "3" },
+            points: [{ time: "2026-01-01T00:10:00.000Z", value: 18, count: 1 }],
+          },
+          {
+            metric_key: "ping.loss",
+            entity_id: "node-a",
+            tags: { task_id: "3" },
+            points: [{ time: "2026-01-01T00:10:00.000Z", value: 0, count: 1 }],
+          },
+          {
+            metric_key: "ping.latency_ms",
+            entity_id: "node-a",
+            tags: { task_id: "8" },
+            points: [{ time: "2026-01-01T00:10:00.000Z", value: -1, count: 1 }],
+          },
+          {
+            metric_key: "ping.loss",
+            entity_id: "node-a",
+            tags: { task_id: "8" },
+            points: [{ time: "2026-01-01T00:10:00.000Z", value: 1, count: 1 }],
+          },
+        ]));
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await getOfficialComparisonPingRecords({
+      uuids: ["node-a"],
+      hours: 1,
+      maxPoints: 24,
+    });
+
+    expect(result.tasks.map((task) => [task.id, task.name])).toEqual([
+      [3, "Transit"],
+      [8, "Edge"],
+    ]);
+    expect(result.records).toEqual([
+      expect.objectContaining({ task_id: 3, value: 18, sample_count: 1, loss_count: 0 }),
+      expect.objectContaining({ task_id: 8, value: -1, sample_count: 1, loss_count: 1 }),
+    ]);
   });
 
   it("uses one shared one-hour window for official ping tasks, metrics, and stats", async () => {

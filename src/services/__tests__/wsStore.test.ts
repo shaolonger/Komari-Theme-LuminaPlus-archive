@@ -4,6 +4,7 @@ import {
   resolveFlatConnectionsTcp,
   resolveRealtimeOnline,
   resolveTrafficTotal,
+  runOfficialSnapshotFixture,
 } from "@/services/wsStore";
 
 // 像 resolveTrafficTotals 每个 tick 那样,把一串原始累计读数喂给 resolver:把上一个显示值
@@ -72,6 +73,93 @@ describe("resolveRealtimeOnline", () => {
   it("marks a node missing from an official snapshot as offline", () => {
     expect(resolveRealtimeOnline(undefined)).toBe(false);
     expect(resolveRealtimeOnline(null)).toBe(false);
+  });
+});
+
+describe("official current-status snapshot reconciliation", () => {
+  it("marks omitted nodes offline, retains explicit offline reports, and clears their traffic trends", () => {
+    const result = runOfficialSnapshotFixture(
+      ["online", "explicit-offline", "omitted"],
+      [
+        {
+          online: {
+            online: true,
+            cpu: 11,
+            ram: 500,
+            ram_total: 1_000,
+            disk: 600,
+            disk_total: 2_000,
+            net_in: 80,
+            net_out: 40,
+            net_total_up: 1_200,
+            net_total_down: 2_400,
+            time: 1_700_000_000,
+          },
+          "explicit-offline": {
+            online: true,
+            cpu: 22,
+            net_in: 60,
+            net_out: 30,
+            net_total_up: 600,
+            net_total_down: 900,
+            time: 1_700_000_000,
+          },
+          omitted: {
+            online: true,
+            cpu: 33,
+            net_in: 50,
+            net_out: 25,
+            net_total_up: 500,
+            net_total_down: 750,
+            time: 1_700_000_000,
+          },
+        },
+        {
+          online: {
+            online: true,
+            cpu: 12,
+            net_in: 90,
+            net_out: 45,
+            net_total_up: 1_300,
+            net_total_down: 2_500,
+            time: 1_700_000_015,
+          },
+          "explicit-offline": {
+            online: false,
+            // Official Komari keeps the last report on an offline node.
+            cpu: 22,
+            net_in: 60,
+            net_out: 30,
+            net_total_up: 600,
+            net_total_down: 900,
+            time: 1_700_000_000,
+          },
+        },
+      ],
+    );
+
+    expect(result.online.metrics).toMatchObject({
+      online: true,
+      cpuPct: 12,
+      trafficUp: 1_300,
+      trafficDown: 2_500,
+    });
+    expect(result["explicit-offline"].metrics).toMatchObject({
+      online: false,
+      // The retained upstream report remains available for the offline card.
+      cpuPct: 22,
+      trafficUp: 600,
+      trafficDown: 900,
+    });
+    expect(result.omitted.metrics).toMatchObject({
+      online: false,
+      // An omitted current-status record keeps prior metrics but cannot remain online.
+      cpuPct: 33,
+      trafficUp: 500,
+      trafficDown: 750,
+    });
+    expect(result["explicit-offline"].trends.up.every((point) => point.value === 0)).toBe(true);
+    expect(result.omitted.trends.down.every((point) => point.value === 0)).toBe(true);
   });
 });
 

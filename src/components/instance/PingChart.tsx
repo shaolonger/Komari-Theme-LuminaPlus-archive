@@ -21,23 +21,27 @@ import {
   smoothByCount,
 } from "./chartData";
 import { latencyHeatColor, lossHeatColor } from "@/utils/metricTone";
-import { isLostPingSample, isValidPingLatency } from "@/utils/pingSamples";
+import { getPingRecordSampleCounts, isValidPingLatency } from "@/utils/pingSamples";
 import { formatLatency, formatMetricNumber, formatPacketLoss } from "@/utils/format";
 import { usePreferences } from "@/hooks/usePreferences";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import type { PingRecord } from "@/types/komari";
 import type { TimedMetricPoint } from "./chartData";
 
-// 调用方传入已升序排好的数组，min/max/p50/p99 共用一次排序，不必重排（也避免
-// `Math.min(...values)`——展开大数组会抛 RangeError）。
-function percentileFromSorted(sorted: number[], ratio: number) {
+function weightedPercentileFromSorted(
+  sorted: Array<{ value: number; weight: number }>,
+  ratio: number,
+) {
   if (sorted.length === 0) return null;
-  const index = (sorted.length - 1) * ratio;
-  const lower = Math.floor(index);
-  const upper = Math.ceil(index);
-  if (lower === upper) return sorted[lower];
-  const weight = index - lower;
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * weight;
+  const totalWeight = sorted.reduce((sum, point) => sum + point.weight, 0);
+  if (totalWeight <= 0) return null;
+  const target = Math.max(1, Math.ceil(totalWeight * ratio));
+  let seen = 0;
+  for (const point of sorted) {
+    seen += point.weight;
+    if (seen >= target) return point.value;
+  }
+  return sorted[sorted.length - 1]?.value ?? null;
 }
 
 // 渲染前先按时间分桶降采样到这么多点（避免 uPlot 抽稀尖刺），再做按点数的滑动平均磨平。
@@ -321,21 +325,34 @@ export function PingChart({
     return tasks.map((task, index) => {
       const records = grouped.get(task.id) ?? [];
       const positives = records
-        .filter((record) => isValidPingLatency(record.value))
-        .map((record) => record.value)
-        .sort((a, b) => a - b);
-      const latest = [...records].reverse().find((record) => isValidPingLatency(record.value))?.value ?? null;
-      const avg = positives.length
-        ? positives.reduce((sum, value) => sum + value, 0) / positives.length
+        .map((record) => ({
+          record,
+          ...getPingRecordSampleCounts(record),
+        }))
+        .filter(({ record, valid }) => isValidPingLatency(record.value) && valid > 0)
+        .map(({ record, valid }) => ({ value: record.value, weight: valid }))
+        .sort((left, right) => left.value - right.value);
+      const latest = [...records].reverse().find((record) => {
+        const { valid } = getPingRecordSampleCounts(record);
+        return isValidPingLatency(record.value) && valid > 0;
+      })?.value ?? null;
+      const validTotal = positives.reduce((sum, point) => sum + point.weight, 0);
+      const avg = validTotal > 0
+        ? positives.reduce((sum, point) => sum + point.value * point.weight, 0) / validTotal
         : null;
-      const min = positives.length ? positives[0] : null;
-      const max = positives.length ? positives[positives.length - 1] : null;
-      const p50 = percentileFromSorted(positives, 0.5);
-      const p99 = percentileFromSorted(positives, 0.99);
-      // positives 全部 > 0，所以非 null 的 p50 必然 > 0——旧的 `p50 > 0` 子判断是多余的。
+      const min = positives[0]?.value ?? null;
+      const max = positives[positives.length - 1]?.value ?? null;
+      const p50 = weightedPercentileFromSorted(positives, 0.5);
+      const p99 = weightedPercentileFromSorted(positives, 0.99);
       const volatility = p50 && p99 ? p99 / p50 : null;
-      const total = records.length;
-      const lost = records.filter((record) => isLostPingSample(record.value)).length;
+      const total = records.reduce(
+        (sum, record) => sum + getPingRecordSampleCounts(record).total,
+        0,
+      );
+      const lost = records.reduce(
+        (sum, record) => sum + getPingRecordSampleCounts(record).lost,
+        0,
+      );
       const loss = total > 0 ? (lost / total) * 100 : task.loss;
       return {
         ...task,

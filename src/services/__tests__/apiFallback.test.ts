@@ -11,14 +11,20 @@ vi.mock("@/services/rpc2Client", async (importOriginal) => {
 });
 
 import {
+  getAdminClients,
+  getAdminPingTasks,
   getComparisonLoadRecords,
   getComparisonPingRecords,
   getLoadRecords,
+  getMe,
+  getNodes,
   getPingOverview,
   getPingRecords,
+  getPublic,
   getRealtimeDelta,
   getRealtimeUpdate,
   getPingOverviewForNodes,
+  saveThemeSettings,
 } from "@/services/api";
 import {
   RpcProtocolError,
@@ -93,6 +99,125 @@ describe("RPC compatibility fallback", () => {
       { uuids: ["node-a"] },
       expect.objectContaining({ timeout: 12_000 }),
     );
+  });
+
+  it("keeps every official poll as a full snapshot when a node disappears from latest status", async () => {
+    let latestStatusPoll = 0;
+    rpcCall.mockImplementation((method: string) => {
+      if (method === "rpc.discover") {
+        return Promise.reject(new RpcResponseError("method not found", -32601));
+      }
+      if (method === "rpc.methods") {
+        return Promise.resolve([
+          "common:getNodesLatestStatus",
+          "public:getPublicPingTasks",
+          "public:queryMetrics",
+          "public:getPingMetricStats",
+        ]);
+      }
+      if (method === "common:getNodesLatestStatus") {
+        latestStatusPoll += 1;
+        return Promise.resolve(latestStatusPoll === 1
+          ? { "node-a": { online: true, cpu: 9 } }
+          : {});
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const first = await getRealtimeUpdate(7, ["node-a", "node-b"]);
+    const second = await getRealtimeUpdate(first.delta.sequence, ["node-a", "node-b"]);
+
+    expect(first.delta).toMatchObject({
+      sequence: 8,
+      snapshot: true,
+      reports: { "node-a": { online: true } },
+    });
+    expect(second.delta).toEqual({
+      sequence: 9,
+      snapshot: true,
+      reports: {},
+    });
+    expect(rpcCall.mock.calls.filter(([method]) => method === "common:getNodesLatestStatus"))
+      .toEqual([
+        [
+          "common:getNodesLatestStatus",
+          { uuids: ["node-a", "node-b"] },
+          { timeout: undefined, signal: undefined },
+        ],
+        [
+          "common:getNodesLatestStatus",
+          { uuids: ["node-a", "node-b"] },
+          { timeout: undefined, signal: undefined },
+        ],
+      ]);
+    expect(rpcCall.mock.calls.map(([method]) => method)).not.toContain("common:getRealtimeDelta");
+    expect(rpcCallHttp).not.toHaveBeenCalled();
+  });
+
+  it("accepts official REST envelopes while retaining the raw /api/me endpoint", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const rawUrl = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      const url = new URL(rawUrl, "https://fixture.local");
+      const envelope = (data: unknown) => new Response(JSON.stringify({
+        status: "success",
+        message: "ok",
+        data,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+      switch (url.pathname) {
+        case "/api/me":
+          return new Response(JSON.stringify({ logged_in: true, username: "admin", uuid: "owner" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        case "/api/public":
+          return envelope({
+            sitename: "Official Komari",
+            theme: "LuminaPlus",
+            theme_settings: { compactShowTrafficTotal: true },
+          });
+        case "/api/nodes":
+          return envelope([{ uuid: "node-a", name: "Official node" }]);
+        case "/api/admin/client/list":
+          return envelope([{ uuid: "node-a", provider: "Example" }]);
+        case "/api/admin/ping":
+          return envelope([{ id: 3, name: "Edge" }]);
+        case "/api/admin/theme/settings":
+          expect(init?.method).toBe("POST");
+          expect(JSON.parse(String(init?.body))).toEqual({ compactShowTrafficTotal: true });
+          expect(url.searchParams.get("theme")).toBe("LuminaPlus official");
+          return new Response(JSON.stringify({ status: "success", message: "saved" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        default:
+          throw new Error(`unexpected REST path ${url.pathname}`);
+      }
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const [me, publicConfig, nodes, clients, tasks] = await Promise.all([
+      getMe(),
+      getPublic(),
+      getNodes(),
+      getAdminClients(),
+      getAdminPingTasks(),
+    ]);
+    await saveThemeSettings("LuminaPlus official", { compactShowTrafficTotal: true });
+
+    expect(me).toMatchObject({ logged_in: true, username: "admin", uuid: "owner" });
+    expect(publicConfig).toMatchObject({
+      sitename: "Official Komari",
+      theme_settings: { compactShowTrafficTotal: true },
+    });
+    expect(nodes).toEqual([expect.objectContaining({ uuid: "node-a", name: "Official node" })]);
+    expect(clients).toEqual([expect.objectContaining({ uuid: "node-a", provider: "Example" })]);
+    expect(tasks).toEqual([expect.objectContaining({ id: 3, name: "Edge" })]);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
   it("uses upstream metric batches instead of the fork-only multi-node records extension", async () => {
