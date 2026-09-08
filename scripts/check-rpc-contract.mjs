@@ -45,6 +45,16 @@ function requireStringArray(value, description) {
   return value;
 }
 
+function requireAuditRef(value, description) {
+  const audit = requireObject(value, description);
+  assert(audit.ref === "main", `${description}.ref must be main`);
+  assert(typeof audit.commit === "string" && /^[0-9a-f]{40}$/.test(audit.commit),
+    `${description}.commit must be a full lowercase Git SHA`);
+  assert(typeof audit.checked_at === "string" && /^\d{4}-\d{2}-\d{2}$/.test(audit.checked_at),
+    `${description}.checked_at must be an ISO date`);
+  return audit;
+}
+
 function quotedStrings(source) {
   return [...source.matchAll(/"((?:\\.|[^"\\])*)"/g)].map((match) => JSON.parse(`"${match[1]}"`));
 }
@@ -135,7 +145,13 @@ assertSameStringMap(extractStringMap(generated, "RPC_CAPABILITIES"), legacyCapab
 
 const officialDiscoveryMethod = official.discovery.method;
 const officialRequiredMethods = official.methods.filter((method) => method !== officialDiscoveryMethod);
-assert(official.profile.source.release === "v1.4.3", "official profile must declare the v1.4.3 baseline release");
+const officialSource = requireObject(official.profile.source, "official profile source");
+assert(officialSource.release === "v1.4.3", "official profile must declare the v1.4.3 baseline release");
+requireAuditRef(officialSource.audited_main, "official profile source.audited_main");
+const officialAgent = requireObject(official.profile.agent, "official profile agent");
+requireString(officialAgent.repository, "official profile agent.repository");
+assert(officialAgent.release === "v1.2.60", "official profile must declare the v1.2.60 agent baseline release");
+requireAuditRef(officialAgent.audited_main, "official profile agent.audited_main");
 assert(official.discovery.params.internal === true,
   "official profile must discover internal methods with internal: true");
 assert(official.discovery.response.type === "string[]",

@@ -14,6 +14,7 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:contract": "node scripts/check-rpc-contract.mjs",
+    "test:upstream-contract": "node scripts/check-upstream-surface.mjs",
     "test:bundle": "npm run build && node scripts/check-performance-budgets.mjs && node scripts/check-theme-static-routes.mjs",
     "test:performance": "node --expose-gc ./node_modules/vitest/vitest.mjs run src/services/__tests__/performanceGate.test.ts src/services/__tests__/apiFallback.test.ts src/workers/__tests__/comparisonAnalysisProtocol.test.ts",
     "test:browser-scale": "npm run build && node scripts/browser-scale-gates.mjs",

@@ -19,6 +19,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Pin the source surfaces that the official-adapter contract was audited
+      # against. The theme only talks to the server, but its node status is
+      # projected from the agent v2 report protocol, so validate both sides.
+      - name: Checkout audited official Komari source surface
+        uses: actions/checkout@v4
+        with:
+          repository: komari-monitor/komari
+          ref: b11ffd3aa7cca03502a75eb64ecbe827d6831d3a
+          path: .upstream/komari
+          fetch-depth: 1
+          persist-credentials: false
+          lfs: false
+          submodules: false
+          sparse-checkout: |
+            web/rpc/jsonrpc
+            web/router
+            web/public
+            web/api/admin
+            web/api/client
+            internal/metricstore
+            pkg/rpc
+            protocol/v2
+
+      - name: Checkout audited official Komari agent source surface
+        uses: actions/checkout@v4
+        with:
+          repository: komari-monitor/komari-agent
+          ref: f7c16a94ba7dd3ce57fbe86c6131d995f645d8d8
+          path: .upstream/komari-agent
+          fetch-depth: 1
+          persist-credentials: false
+          lfs: false
+          submodules: false
+          sparse-checkout: |
+            protocol/v2
+            server
+            monitoring
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -32,6 +70,12 @@ jobs:
       # every release artifact behind the same full gate used locally.
       - name: Run release gates
         run: npm run test:release-gates
+
+      - name: Verify official upstream compatibility surface
+        env:
+          KOMARI_UPSTREAM_DIR: ${{ github.workspace }}/.upstream/komari
+          KOMARI_AGENT_UPSTREAM_DIR: ${{ github.workspace }}/.upstream/komari-agent
+        run: npm run test:upstream-contract
 
       - name: Build package
         run: npm run package

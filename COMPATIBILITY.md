@@ -4,12 +4,21 @@ LuminaPlus 保留现有页面、卡片、筛选、比较和主题管理功能，
 
 | 后端 | 识别方式 | 验证基线 |
 | --- | --- | --- |
-| 官方 [Komari](https://github.com/komari-monitor/komari) | 官方 RPC 方法集合 | Komari 1.4.3、[komari-agent](https://github.com/komari-monitor/komari-agent) 1.2.60 |
+| 官方 [Komari](https://github.com/komari-monitor/komari) | 官方 RPC 方法集合 | 最新发布 Komari 1.4.3、[komari-agent](https://github.com/komari-monitor/komari-agent) 1.2.60；并审计到 2026-09-08 的官方 `main` 快照 |
 | 既有二次修改版 | `rpc.discover` 返回 `komari.rpc.v2.4` | 原有 fork RPC v2.4 合约 |
 
 这里的版本是验证基线，不是前端的硬编码开关。主题根据实际可调用的 RPC 方法选择数据适配路径，因此上游后续版本只要保持下述方法表面即可继续使用；若缺少必需方法，主题会明确报出不兼容，而不会把通信或权限问题误判为另一种后端。
 
 主题只与 Komari 服务端通信，不直接调用 agent API；Agent 的兼容性经官方服务端的 report/status/metric 输出间接获得，而不是在主题中复刻 Agent 协议。
+
+### 当前上游快照
+
+除发布版本基线外，仓库还锁定并检查了本次审计时的官方 `main` 提交：Komari 服务端
+`b11ffd3aa7cca03502a75eb64ecbe827d6831d3a`，以及 komari-agent
+`f7c16a94ba7dd3ce57fbe86c6131d995f645d8d8`。发布 CI 会以这两个精确提交检验节点状态投影、指标/Ping RPC、HTTP 兼容入口、主题静态资源回退和 agent v2 上报表面；它们的 SHA 同时记录在
+[`contracts/backend-profiles/official-komari-v1.4.3.json`](contracts/backend-profiles/official-komari-v1.4.3.json)。
+
+这不是把主题锁死在某一个提交。运行时仍按 RPC 能力自动识别；精确 SHA 的作用是让“兼容最新版”的审计可复现，并在后续主动升级审计基线时发现上游表面的变化。
 
 ## 自动识别与数据适配
 
@@ -73,12 +82,20 @@ npm run test:performance
 npm run test:browser-scale
 ```
 
+若要在本地复验与官方当前 `main` 的源代码表面，请将两个精确提交检出到本地，并运行：
+
+```bash
+KOMARI_UPSTREAM_DIR=/path/to/komari \
+KOMARI_AGENT_UPSTREAM_DIR=/path/to/komari-agent \
+npm run test:upstream-contract
+```
+
 发布前使用完整门禁：
 
 ```bash
 npm run test:release-gates
 ```
 
-该门禁会串行执行单元测试、类型检查、静态检查、RPC 合约检查、性能检查、构建预算和浏览器规模检查。
+该门禁会串行执行单元测试、类型检查、静态检查、RPC 合约检查、性能检查、构建预算和浏览器规模检查。发布 CI 还会额外检出上文锁定的官方上游快照，执行 `test:upstream-contract`。
 
 项目的 `npm run release` 会先执行同一套发布门禁，再进行打包。
