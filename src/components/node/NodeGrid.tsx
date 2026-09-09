@@ -465,14 +465,6 @@ function HomeRiskFilters({
   );
 }
 
-function withoutFacetFilterValue(filters: HomeFacetFilters, dimensionId: string, value: string) {
-  const next = { ...filters };
-  const values = (next[dimensionId] ?? []).filter((item) => item !== value);
-  if (values.length > 0) next[dimensionId] = values;
-  else delete next[dimensionId];
-  return next;
-}
-
 function clearFacetFilter(filters: HomeFacetFilters, dimensionId: string) {
   const next = { ...filters };
   delete next[dimensionId];
@@ -491,7 +483,6 @@ export function FacetRail({
   optionCounts,
   selectedValues,
   activeFilterCount,
-  onSelectDimension,
   onSelectValue,
 }: {
   dimensions: HomeFacetDimension[];
@@ -501,7 +492,6 @@ export function FacetRail({
   optionCounts: Map<string, number>;
   selectedValues: string[];
   activeFilterCount: number;
-  onSelectDimension: (dimension: string) => void;
   onSelectValue: (value: string) => void;
 }) {
   const orderedOptions = useMemo(
@@ -604,24 +594,13 @@ export function FacetRail({
     <section
       ref={railRef}
       className="home-facet-rail"
-      aria-label="分类筛选"
+      aria-label={`${dimensionLabel}分类筛选`}
       data-overflow={overflowOptions.length > 0 ? "true" : "false"}
     >
       <div ref={dimensionRef} className="home-facet-dimension-select">
         <SlidersHorizontal size={13} aria-hidden="true" />
-        <select
-          value={selectedDimension}
-          onChange={(event) => onSelectDimension(event.target.value)}
-          aria-label="选择筛选维度"
-        >
-          {dimensions.map((dimension) => (
-            <option key={dimension.id} value={dimension.id}>
-              {dimension.label} · {dimensionCoverage.get(dimension.id) ?? 0}
-            </option>
-          ))}
-        </select>
+        <span>{dimensionLabel}</span>
         {activeFilterCount > 0 && <strong>{activeFilterCount}</strong>}
-        <ChevronDown size={12} aria-hidden="true" />
       </div>
       <div
         className="home-facet-options"
@@ -702,48 +681,6 @@ export function FacetRail({
         ))}
       </div>
     </section>
-  );
-}
-
-function HomeFilterChips({
-  dimensions,
-  filters,
-  selectedDimension,
-  onRemoveFacetValue,
-  onClearFacets,
-}: {
-  dimensions: HomeFacetDimension[];
-  filters: HomeFacetFilters;
-  selectedDimension: string;
-  onRemoveFacetValue: (dimensionId: string, value: string) => void;
-  onClearFacets: () => void;
-}) {
-  const chips: Array<{ key: string; label: string; onRemove: () => void }> = [];
-  for (const [dimensionId, values] of Object.entries(filters)) {
-    if (dimensionId === selectedDimension) continue;
-    for (const value of values) {
-      chips.push({
-        key: `${dimensionId}:${value}`,
-        label: `${getDimensionLabel(dimensions, dimensionId)}: ${value}`,
-        onRemove: () => onRemoveFacetValue(dimensionId, value),
-      });
-    }
-  }
-
-  if (chips.length === 0) return null;
-
-  return (
-    <div className="home-filter-chips" aria-label="已生效筛选">
-      {chips.map((chip) => (
-        <button key={chip.key} type="button" onClick={chip.onRemove} title={`移除 ${chip.label}`}>
-          <span>{chip.label}</span>
-          <X size={13} aria-hidden="true" />
-        </button>
-      ))}
-      <button type="button" className="home-filter-clear" onClick={onClearFacets}>
-        清空分类
-      </button>
-    </div>
   );
 }
 
@@ -1134,45 +1071,17 @@ export function NodeGrid() {
     themeSettings.homeDefaultFacetDimension,
     visibleFacetDimensions,
   ]);
-  const selectedFacetValues = useMemo(
-    () => facetFilters[selectedFacetDimension] ?? [],
-    [facetFilters, selectedFacetDimension],
+  const [shownDimensions, setShownDimensions] = useState<string[] | null>(null);
+  const enabledDimensions = visibleFacetDimensions.filter((dimension) =>
+    (shownDimensions ?? [selectedFacetDimension, "region"]).includes(dimension.id) || (facetFilters[dimension.id]?.length ?? 0) > 0,
   );
-  const optionFacetFilters = useMemo(
-    () => clearFacetFilter(facetFilters, selectedFacetDimension),
-    [facetFilters, selectedFacetDimension],
-  );
-  const optionFacetNodes = useMemo(
-    () =>
-      filterHomeFacetNodes({
-        nodes: facetNodes,
-        filters: optionFacetFilters,
-        selectedNodeUuids,
-      }),
-    [facetNodes, optionFacetFilters, selectedNodeUuids],
-  );
-  const facetOptions = useMemo(() => {
-    const options = getHomeFacetOptions(optionFacetNodes, selectedFacetDimension);
-    return selectedFacetDimension === HOME_FACET_LEGACY_GROUP
-      ? sortHomeGroupOptions(options, themeSettings.isReady ? themeSettings.homeGroupOrder : [])
-      : options;
-  }, [
-    optionFacetNodes,
-    selectedFacetDimension,
-    themeSettings.homeGroupOrder,
-    themeSettings.isReady,
-  ]);
-  const facetOptionCounts = useMemo(() => {
-    const counts = new Map<string, number>([
-      [HOME_ALL_GROUP, optionFacetNodes.length],
-    ]);
-    for (const node of optionFacetNodes) {
-      for (const value of node.facets[selectedFacetDimension] ?? []) {
-        counts.set(value, (counts.get(value) ?? 0) + 1);
-      }
-    }
-    return counts;
-  }, [optionFacetNodes, selectedFacetDimension]);
+  const facetRows = useMemo(() => visibleFacetDimensions.map((dimension) => {
+    const candidates = filterHomeFacetNodes({ nodes: facetNodes, filters: clearFacetFilter(facetFilters, dimension.id), selectedNodeUuids });
+    const allOptions = getHomeFacetOptions(facetNodes, dimension.id);
+    const counts = new Map<string, number>([[HOME_ALL_GROUP, candidates.length]]);
+    for (const node of candidates) for (const value of node.facets[dimension.id] ?? []) counts.set(value, (counts.get(value) ?? 0) + 1);
+    return { dimension, options: dimension.id === HOME_FACET_LEGACY_GROUP ? sortHomeGroupOptions(allOptions, themeSettings.homeGroupOrder) : allOptions, counts };
+  }), [visibleFacetDimensions, facetNodes, facetFilters, selectedNodeUuids, themeSettings.homeGroupOrder]);
   const facetDimensionCoverage = useMemo(() => {
     const coverage = new Map<string, number>();
     for (const dimension of visibleFacetDimensions) {
@@ -1196,18 +1105,6 @@ export function NodeGrid() {
       ),
     [facetFilters],
   );
-  useEffect(() => {
-    if (selectedFacetValues.length === 0) return;
-    const available = new Set(facetOptions);
-    const nextValues = selectedFacetValues.filter((value) => available.has(value));
-    if (nextValues.length === selectedFacetValues.length) return;
-    setFacetFilters((prev) => {
-      const next = { ...prev };
-      if (nextValues.length > 0) next[selectedFacetDimension] = nextValues;
-      else delete next[selectedFacetDimension];
-      return next;
-    });
-  }, [facetOptions, selectedFacetDimension, selectedFacetValues]);
   const facetFilteredUuidSet = useMemo(
     () =>
       new Set(
@@ -1437,23 +1334,15 @@ export function NodeGrid() {
       : mode === "compact"
       ? "repeat(auto-fill, minmax(min(100%, 260px), 1fr))"
       : "repeat(auto-fill, minmax(min(100%, 360px), 1fr))";
-  const selectFacetValue = (value: string) => {
+  const selectFacetValue = (dimensionId: string, value: string) => {
     setActiveSavedViewId("");
     setFacetFilters((prev) => {
-      if (value === HOME_ALL_GROUP) return clearFacetFilter(prev, selectedFacetDimension);
+      if (value === HOME_ALL_GROUP) return clearFacetFilter(prev, dimensionId);
       return {
         ...prev,
-        [selectedFacetDimension]: [value],
+        [dimensionId]: prev[dimensionId]?.includes(value) ? prev[dimensionId].filter((item) => item !== value) : [value],
       };
     });
-  };
-  const selectFacetDimension = (dimension: string) => {
-    setActiveSavedViewId("");
-    setSelectedFacetDimension(dimension);
-  };
-  const removeFacetValue = (dimensionId: string, value: string) => {
-    setActiveSavedViewId("");
-    setFacetFilters((prev) => withoutFacetFilterValue(prev, dimensionId, value));
   };
   const clearAllFilters = () => {
     setActiveSavedViewId("");
@@ -1462,10 +1351,7 @@ export function NodeGrid() {
     setSelectedRiskFilter("all");
     setNodeSearch("");
   };
-  const clearFacetFilters = () => {
-    setActiveSavedViewId("");
-    setFacetFilters({});
-  };
+
   const clearSelectedNodes = () => {
     setActiveSavedViewId("");
     setSelectedNodeUuids([]);
@@ -1706,25 +1592,33 @@ export function NodeGrid() {
           />
         )}
         {showFacetRail && (
-          <FacetRail
-            dimensions={visibleFacetDimensions}
-            dimensionCoverage={facetDimensionCoverage}
-            selectedDimension={selectedFacetDimension}
-            options={facetOptions}
-            optionCounts={facetOptionCounts}
-            selectedValues={selectedFacetValues}
-            activeFilterCount={activeFacetFilterCount}
-            onSelectDimension={selectFacetDimension}
-            onSelectValue={selectFacetValue}
-          />
+          <div className="home-facet-stack">
+            <div className="home-facet-dimensions" role="group" aria-label="显示筛选类别">
+              <span>分类</span>
+              {visibleFacetDimensions.map((dimension) => <button type="button" key={dimension.id}
+                aria-pressed={enabledDimensions.some((item) => item.id === dimension.id)}
+                onClick={() => {
+                  const current = enabledDimensions.map((item) => item.id);
+                  const hiding = current.includes(dimension.id);
+                  setShownDimensions(hiding ? current.filter((id) => id !== dimension.id) : [...current, dimension.id]);
+                  if (hiding) { setFacetFilters((prev) => clearFacetFilter(prev, dimension.id)); setActiveSavedViewId(""); }
+                }}>{dimension.label}</button>)}
+              <small>跨类别同时筛选</small>
+            </div>
+            {facetRows.filter(({ dimension }) => enabledDimensions.some((item) => item.id === dimension.id)).map(({ dimension, options, counts }) => <FacetRail
+              key={dimension.id}
+              dimensions={visibleFacetDimensions}
+              dimensionCoverage={facetDimensionCoverage}
+              selectedDimension={dimension.id}
+              options={options}
+              optionCounts={counts}
+              selectedValues={facetFilters[dimension.id] ?? []}
+              activeFilterCount={facetFilters[dimension.id]?.length ?? 0}
+              onSelectValue={(value) => selectFacetValue(dimension.id, value)}
+            />)}
+          </div>
         )}
-        <HomeFilterChips
-          dimensions={visibleFacetDimensions}
-          filters={facetFilters}
-          selectedDimension={selectedFacetDimension}
-          onRemoveFacetValue={removeFacetValue}
-          onClearFacets={clearFacetFilters}
-        />
+
       </section>
       {listUuids.length > 0 ? (
         mode === "list" ? (

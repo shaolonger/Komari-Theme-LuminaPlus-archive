@@ -526,6 +526,7 @@ async function waitUntil(cdp, expression, timeoutMs) {
     cards: document.querySelectorAll('.home-node-card-slot').length,
     rows: document.querySelectorAll('.node-list-row').length,
     url: location.href
+    , focus: document.activeElement?.outerHTML, switcher: document.querySelector('.node-search-switcher')?.outerHTML
   })`);
   throw new Error(`browser condition timed out: ${expression}; ${JSON.stringify(diagnostics)}`);
 }
@@ -710,6 +711,7 @@ try {
   await clearFixturePage(cdp);
   activeFixture = { backend: BACKEND_PROFILES.official.id, nodes: 3, soak: false, run: "ui-regressions", ui: true };
   await cdp.call("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await cdp.call("Emulation.setFocusEmulationEnabled", { enabled: true });
   await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/instance/node-0` });
   await waitUntil(cdp, `Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Ping')`, 6_000);
   await cdp.value(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Ping').click()`);
@@ -754,14 +756,36 @@ try {
   await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/` });
   await waitUntil(cdp, `document.querySelectorAll('.ping-task-lane').length === 18`, 6_000);
   failGate(await cdp.value(`Array.from(document.querySelectorAll('.home-node-card-slot')[0].querySelectorAll('.ping-task-lane-name')).map(e => e.textContent).join() === 'Task 1,Task 2,Task 3,Task 4,Task 6,Task 5'`), "card did not preserve all six configured tasks in order");
-  const facetBefore = await cdp.value(`Array.from(document.querySelectorAll('.home-facet-rail button')).map(e => e.textContent)`);
+  const facetBefore = await cdp.value(`Array.from(document.querySelectorAll('.home-facet-rail button')).map(e => e.querySelector('span')?.textContent)`);
   await cdp.value(`Array.from(document.querySelectorAll('.home-facet-rail button')).find(e => e.textContent.includes('Group 2')).click()`);
-  failGate(JSON.stringify(await cdp.value(`Array.from(document.querySelectorAll('.home-facet-rail button')).map(e => e.textContent)`)) === JSON.stringify(facetBefore), "selected facet moved from its position");
+  failGate(JSON.stringify(await cdp.value(`Array.from(document.querySelectorAll('.home-facet-rail button')).map(e => e.querySelector('span')?.textContent)`)) === JSON.stringify(facetBefore), "selected facet moved from its position");
+  await cdp.value(`document.querySelector('button[title="地区：R1"]').click()`);
+  await waitUntil(cdp, `document.querySelectorAll('.home-node-card-slot').length === 0`, 2_000);
+  failGate(await cdp.value(`document.querySelector('button[title="分组：Group 2"]').getAttribute('aria-selected') === 'true'`), "cross-category empty results silently cleared group");
+  await cdp.value(`document.querySelector('button[title="地区：R2"]').click()`);
+  await waitUntil(cdp, `document.querySelectorAll('.home-node-card-slot').length === 1`, 2_000);
+  if (process.env.BROWSER_GATE_SCREENSHOT) {
+    const screenshot = await cdp.call("Page.captureScreenshot", { format: "png" });
+    writeFileSync(`${process.env.BROWSER_GATE_SCREENSHOT}.facets.png`, Buffer.from(screenshot.data, "base64"));
+  }
+  await cdp.call("Page.navigate", { url: `http://127.0.0.1:${address.port}/instance/node-0` });
+  await waitUntil(cdp, `document.querySelector('input[aria-label="搜索并切换 VPS"]') !== null`, 6_000);
+  await waitUntil(cdp, `document.querySelector('.instance-uplot-wrap canvas') !== null`, 6_000);
+  await cdp.value(`document.querySelector('input[aria-label="搜索并切换 VPS"]').focus()`);
+  await waitUntil(cdp, `document.querySelectorAll('.node-switch-results [role="option"]').length === 3`, 4_000);
+  await cdp.call("Input.insertText", { text: "scale 2" });
+  await waitUntil(cdp, `document.querySelectorAll('.node-switch-results [role="option"]').length === 1`, 2_000);
+  if (process.env.BROWSER_GATE_SCREENSHOT) {
+    const screenshot = await cdp.call("Page.captureScreenshot", { format: "png" });
+    writeFileSync(`${process.env.BROWSER_GATE_SCREENSHOT}.search.png`, Buffer.from(screenshot.data, "base64"));
+  }
+  await cdp.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  await waitUntil(cdp, `location.pathname === '/instance/node-2'`, 4_000);
   if (process.env.BROWSER_GATE_SCREENSHOT) {
     const screenshot = await cdp.call("Page.captureScreenshot", { format: "png" });
     writeFileSync(process.env.BROWSER_GATE_SCREENSHOT, Buffer.from(screenshot.data, "base64"));
   }
-  results.push({ uiRegressions: "Ping presets, Beijing custom range, VPS batch save/reload, six-task order, stable facets" });
+  results.push({ uiRegressions: "Ping ranges, VPS task save/reload, cross-category filtering, keyboard VPS search" });
   console.log(JSON.stringify(results, null, 2));
 } finally {
   cdp?.close();

@@ -1,6 +1,6 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronLeft } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import "uplot/dist/uPlot.min.css";
 import { InstanceDetails } from "@/components/instance/InstanceDetails";
 import { PingChart } from "@/components/instance/PingChart";
@@ -14,6 +14,8 @@ import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import type { NodeInfo } from "@/types/komari";
 import { previousBeijingEvening, resolveBeijingRange, type PingTimeRange } from "@/utils/pingTimeRange";
+
+import { NodeSwitcher } from "@/components/instance/NodeSwitcher";
 
 const DEFAULT_PING_HOURS = 6;
 
@@ -115,39 +117,9 @@ export function Instance() {
           <ChevronLeft size={14} />
           返回
         </Link>
-        <label className="instance-node-switcher" htmlFor="instance-node-switcher">
-          <span className="instance-node-switcher-label">切换 VPS</span>
-          <span className="instance-node-select-wrap">
-            <select
-              id="instance-node-switcher"
-              className="instance-node-select"
-              value={selectedNodeUuid}
-              disabled={
-                nodeOptions.length === 0 ||
-                (nodeOptions.length <= 1 && selectedNodeUuid !== "")
-              }
-              onChange={(event) => {
-                const nextUuid = event.currentTarget.value;
-                if (!nextUuid || nextUuid === uuid) return;
-                startTransition(() => {
-                  navigate(`/instance/${nextUuid}`);
-                });
-              }}
-            >
-              {selectedNodeUuid === "" && (
-                <option value="">
-                  {nodeOptions.length > 0 ? "当前节点不可用" : "加载节点中..."}
-                </option>
-              )}
-              {nodeOptions.map((node) => (
-                <option key={node.uuid} value={node.uuid}>
-                  {formatNodeOptionLabel(node)}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={14} aria-hidden />
-          </span>
-        </label>
+        <NodeSwitcher key={uuid} nodes={nodeOptions} currentUuid={selectedNodeUuid} onSelect={(nextUuid) => {
+          if (nextUuid !== uuid) startTransition(() => navigate(`/instance/${nextUuid}`));
+        }} />
       </div>
       <InstanceDetails uuid={uuid} onNodeReady={alignCharts} />
       <div ref={chartControlsRef} className="instance-chart-controls">
@@ -262,10 +234,4 @@ export function Instance() {
       </div>
     </div>
   );
-}
-
-function formatNodeOptionLabel(node: NodeInfo) {
-  const name = node.name.trim() || node.uuid;
-  const group = String(node.group || "").trim();
-  return group ? `${group} / ${name}` : name;
 }
