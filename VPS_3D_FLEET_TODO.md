@@ -1,4 +1,4 @@
-# LuminaPlus 3D Fleet Atlas TODO
+# Aster 3D Fleet Atlas TODO
 
 Scope note: build an additional 3D fleet view mode for VPS operations. Existing card/list and comparison workflows remain the primary daily interfaces. Remote terminal, remote command execution, GPU controls, and automatic update controls remain out of scope.
 

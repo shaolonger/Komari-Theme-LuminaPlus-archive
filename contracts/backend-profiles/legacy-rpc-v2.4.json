@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "kind": "fork-v2.4",
-  "label": "LuminaPlus legacy Komari RPC v2.4",
+  "label": "Aster legacy Komari RPC v2.4",
   "source": {
     "repository": "https://github.com/shaolonger/komari",
     "minimum_server_version": "1.4.0"

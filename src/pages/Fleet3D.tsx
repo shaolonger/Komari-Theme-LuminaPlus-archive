@@ -144,7 +144,7 @@ function formatReplayPressure(node: Fleet3DNode) {
 function snapshotFileName(displayTimeZone: DisplayTimeZone) {
   const parts = getZonedDateTimeParts(Date.now(), displayTimeZone);
   const timestamp = `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}-${pad2(parts.hour)}-${pad2(parts.minute)}-${pad2(parts.second)}`;
-  return `lumina-3d-fleet-${timestamp}.png`;
+  return `aster-3d-fleet-${timestamp}.png`;
 }
 
 function formatPingLatency(node: Fleet3DNode) {
@@ -554,7 +554,7 @@ export function Fleet3D() {
             <ChevronLeft size={18} aria-hidden="true" />
           </Link>
           <div>
-            <p className="fleet3d-eyebrow">LuminaPlus</p>
+            <p className="fleet3d-eyebrow">Aster</p>
             <h1>VPS 3D 星图</h1>
             <span
               className={`fleet3d-renderer-pill is-${rendererCapability?.mode ?? "unavailable"}`}

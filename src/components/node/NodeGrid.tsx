@@ -89,7 +89,9 @@ import { VpsListSortPanel } from "./VpsListSortPanel";
 // 把多个 uuid 拼成单个签名串作为 memo key。逗号安全:uuid 是标准 UUID
 // ([0-9a-f-]),永远不含逗号。
 const UUID_KEY_SEPARATOR = ",";
-const WORKBENCH_OPEN_STORAGE_KEY = "lumina-home-workbench-open";
+const WORKBENCH_OPEN_STORAGE_KEY = "aster-home-workbench-open";
+// Read the former key only when Aster has no saved preference yet.
+const LEGACY_WORKBENCH_OPEN_STORAGE_KEY = "lumina-home-workbench-open";
 const HOME_COMPARE_SEED_COUNT = 3;
 
 interface HomeOverview {
@@ -142,7 +144,9 @@ function riskMatchesFilter(risks: HomeRiskItem[] | undefined, filter: HomeRiskFi
 
 function readStoredWorkbenchOpen() {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(WORKBENCH_OPEN_STORAGE_KEY) === "true";
+  const stored = window.localStorage.getItem(WORKBENCH_OPEN_STORAGE_KEY)
+    ?? window.localStorage.getItem(LEGACY_WORKBENCH_OPEN_STORAGE_KEY);
+  return stored === "true";
 }
 
 function formatExpirePressure(node: VpsWorkbenchNode) {

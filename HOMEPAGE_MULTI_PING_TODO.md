@@ -1,6 +1,6 @@
 # Homepage Multi-Ping TODO
 
-Scope: first-stage upgrade for homepage Ping display and LuminaPlus theme settings. A VPS can be associated with multiple Ping tasks, homepage cards show a compact worst-first aggregate, and existing single-task settings remain compatible. Remote terminal, remote command execution, GPU controls, and automatic update controls remain out of scope.
+Scope: first-stage upgrade for homepage Ping display and Aster theme settings. A VPS can be associated with multiple Ping tasks, homepage cards show a compact worst-first aggregate, and existing single-task settings remain compatible. Remote terminal, remote command execution, GPU controls, and automatic update controls remain out of scope.
 
 Context recovery note: if LLM context compaction happens, resume from this file. Run `git status --short`, `git log --oneline -10`, and continue from the first unchecked task. Each task must be implemented, checked, and committed with its checkbox marked complete before moving on.
 

@@ -1,8 +1,8 @@
-# LuminaPlus Performance V2
+# Aster Performance V2
 
 Status: complete; v1.22.0 release candidate
 
-LuminaPlus keeps React, uPlot, Canvas strips and route-level lazy loading. V2
+Aster keeps React, uPlot, Canvas strips and route-level lazy loading. V2
 removes periodic full-state polling and per-node/task history fan-out by using
 the versioned Komari RPC contract and sequence delta stream.
 

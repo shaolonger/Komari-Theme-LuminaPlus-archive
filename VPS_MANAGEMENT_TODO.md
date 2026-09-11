@@ -1,4 +1,4 @@
-# LuminaPlus VPS management upgrade TODO
+# Aster VPS management upgrade TODO
 
 Scope note: GPU monitoring, remote terminal, remote command execution, and automatic update controls are intentionally out of scope for this round.
 

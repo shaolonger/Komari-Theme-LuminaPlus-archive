@@ -1,4 +1,4 @@
-# LuminaPlus v1.22.1
+# Aster v1.22.1
 
 v1.22.1 修复 Performance V2 后首页卡片 Ping “暂无趋势”和折线消失的回归；
 这是 bug 修复，不是为了性能故意删除功能。

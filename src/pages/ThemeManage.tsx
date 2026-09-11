@@ -1053,11 +1053,11 @@ export function ThemeManage() {
       </div>
 
       <InstancePanel
-        title="LuminaPlus 主题设置"
-        description="集中调整 LuminaPlus 的展示偏好与首页延迟绑定；保存后会立即应用到当前站点。"
+        title="Aster 主题设置"
+        description="集中调整 Aster 的展示偏好与首页延迟绑定；保存后会立即应用到当前站点。"
         aside={
           <div className="text-right text-[11px] text-[var(--text-tertiary)]">
-            <div>主题: {config?.theme || "Komari-Theme-LuminaPlus"}</div>
+            <div>主题: {config?.theme || "Komari-Theme-Aster"}</div>
             <div>
               已绑定首页 Ping 节点 {boundClientCount} / {sortedClients.length}
               {bindingPairCount > boundClientCount ? ` · ${bindingPairCount} 关系` : ""}

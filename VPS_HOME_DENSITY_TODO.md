@@ -1,4 +1,4 @@
-# LuminaPlus VPS home density TODO
+# Aster VPS home density TODO
 
 Scope note: this round optimizes the home-page VPS scanning experience with an Apple-inspired, content-first visual hierarchy. Remote terminal, remote command execution, GPU controls, and automatic update controls remain out of scope.
 

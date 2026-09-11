@@ -272,7 +272,7 @@ const server = createServer(async (request, response) => {
     count("public", fixture.run);
     const publicConfig = {
       sitename: "Komari Scale Gate",
-      theme: "LuminaPlus",
+      theme: "Aster",
       theme_settings: {
         showHomeOverview: false,
         showGroupTabs: false,
@@ -414,7 +414,7 @@ const server = createServer(async (request, response) => {
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address();
 if (!address || typeof address === "string") throw new Error("fixture server did not bind TCP");
-const profile = mkdtempSync(join(tmpdir(), "lumina-browser-gate-"));
+const profile = mkdtempSync(join(tmpdir(), "aster-browser-gate-"));
 const child = spawn(chrome, [
   "--headless=new",
   "--no-first-run",

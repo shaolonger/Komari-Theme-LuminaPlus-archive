@@ -1,4 +1,4 @@
-# LuminaPlus VPS workbench TODO
+# Aster VPS workbench TODO
 
 Scope note: this round focuses on daily VPS management decisions. GPU, remote terminal, remote command execution, and automatic update controls remain out of scope.
 

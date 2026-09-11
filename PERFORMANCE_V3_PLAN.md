@@ -1,4 +1,4 @@
-# LuminaPlus Performance V3：单请求真实 Ping 趋势
+# Aster Performance V3：单请求真实 Ping 趋势
 
 状态：完成，已发布 v1.22.1
 

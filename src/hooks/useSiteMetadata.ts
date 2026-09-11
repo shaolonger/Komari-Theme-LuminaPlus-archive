@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 
-const FALLBACK_TITLE = "Komari-Theme-LuminaPlus";
-const FALLBACK_DESCRIPTION = "A Komari monitor theme.";
+const FALLBACK_TITLE = "Komari-Theme-Aster";
+const FALLBACK_DESCRIPTION = "Aster — server monitoring, asset management and fleet visualization for Komari.";
 
 function updateMeta(selector: string, attr: "content", value: string) {
   const element = document.querySelector<HTMLMetaElement>(selector);

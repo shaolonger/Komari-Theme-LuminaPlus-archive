@@ -1,4 +1,4 @@
-# LuminaPlus Performance V2 Todo
+# Aster Performance V2 Todo
 
 Every checked item requires focused tests, typecheck/build, affected browser
 tests and a dedicated commit.
@@ -26,4 +26,4 @@ tests and a dedicated commit.
 ## L2-3 Acceptance and release
 
 - [x] **L2-301 Contract matrix, 30/300/1000-node browser and long-run tests**
-- [x] **L2-302 Version, push, tag and publish the LuminaPlus release**
+- [x] **L2-302 Version, push, tag and publish the Aster release**

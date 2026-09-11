@@ -1,8 +1,13 @@
-# Komari-Theme-LuminaPlus
+# Aster · 星枢
 
-### 由于项目更名 请大家**重新在komari添加一下新的主题仓库地址** 可能需要重新配置一下 带来不便请谅解，不好意思了铁铁们
+面向 Komari 的服务器监控与资产管理主题，由 shaolonger 独立维护。围绕节点总览、VPS 工作台、多目标 Ping 分析、节点比较和 3D 舰队视图，重构界面与交互体验。
 
-基于 [komari-theme-Lumina](https://github.com/stqfdyr/komari-theme-Lumina) 的增强分支。感谢原作者 [stqfdyr](https://github.com/stqfdyr) 开源 Lumina 主题。
+## 安装与迁移
+
+- 主题仓库：<https://github.com/shaolonger/Komari-Theme-Aster>
+- 在 [Releases](https://github.com/shaolonger/Komari-Theme-Aster/releases/latest) 下载 `Komari-Theme-Aster-v*.zip`，通过 Komari 后台上传并启用。
+- 从旧主题迁移时，先记录原主题配置，再添加新仓库或上传 Aster 包；后端可能按主题名称分别存储配置，启用后请检查并恢复设置。
+- v1.26.0 起使用 Aster 品牌并延续原版本序列。浏览器中的工作台展开偏好会自动继承。
 
 ## 后端兼容性
 
@@ -11,7 +16,7 @@
 ## 效果预览
 
 <p align="center">
-  <img src="docs/images/theme-preview.png" alt="Komari-Theme-LuminaPlus 综合预览" width="90%">
+  <img src="docs/images/theme-preview.png" alt="Komari-Theme-Aster 综合预览" width="90%">
 </p>
 
 ### 首页总览与节点卡片
@@ -122,7 +127,9 @@
   <img src="docs/images/v1.1.7/offline-card.png" alt="离线节点状态" width="70%">
 </p>
 
-## 致谢
+## 来源与致谢
+
+本项目最初基于 [shanyang242/Komari-Theme-LuminaPlus](https://github.com/shanyang242/Komari-Theme-LuminaPlus) 修改，现以 Aster 品牌持续开发。感谢 shark、shanyang 及原项目贡献者的工作；更名保留原有贡献历史与来源说明。
 
 特别感谢 [stqfdyr/komari-theme-Lumina](https://github.com/stqfdyr/komari-theme-Lumina)。
 
@@ -136,10 +143,10 @@
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=shanyang242%2FKomari-Theme-LuminaPlus&type=timeline&legend=bottom-right">
+<a href="https://www.star-history.com/?repos=shaolonger%2FKomari-Theme-Aster&type=timeline&legend=bottom-right">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=shanyang242/Komari-Theme-LuminaPlus&type=timeline&theme=dark&legend=bottom-right" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=shanyang242/Komari-Theme-LuminaPlus&type=timeline&legend=bottom-right" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=shanyang242/Komari-Theme-LuminaPlus&type=timeline&legend=bottom-right" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=shaolonger/Komari-Theme-Aster&type=timeline&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=shaolonger/Komari-Theme-Aster&type=timeline&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=shaolonger/Komari-Theme-Aster&type=timeline&legend=bottom-right" />
  </picture>
 </a>

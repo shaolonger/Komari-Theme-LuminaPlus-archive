@@ -1,4 +1,4 @@
-# LuminaPlus v1.22.0
+# Aster v1.22.0
 
 v1.22.0 是与 Komari v1.4.0 配套的规模化性能版本，重点消除实时面板、Ping 概览和 Compare 页面中的请求与渲染放大。
 

@@ -1,4 +1,4 @@
-# LuminaPlus VPS comparison TODO
+# Aster VPS comparison TODO
 
 Scope note: build the first-stage VPS comparison workspace only. Remote terminal, remote command execution, GPU controls, and automatic update controls remain out of scope.
 

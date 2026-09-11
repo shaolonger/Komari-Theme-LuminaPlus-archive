@@ -177,7 +177,7 @@ describe("RPC compatibility fallback", () => {
         case "/api/public":
           return envelope({
             sitename: "Official Komari",
-            theme: "LuminaPlus",
+            theme: "Aster",
             theme_settings: { compactShowTrafficTotal: true },
           });
         case "/api/nodes":
@@ -189,7 +189,7 @@ describe("RPC compatibility fallback", () => {
         case "/api/admin/theme/settings":
           expect(init?.method).toBe("POST");
           expect(JSON.parse(String(init?.body))).toEqual({ compactShowTrafficTotal: true });
-          expect(url.searchParams.get("theme")).toBe("LuminaPlus official");
+          expect(url.searchParams.get("theme")).toBe("Aster official");
           return new Response(JSON.stringify({ status: "success", message: "saved" }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -207,7 +207,7 @@ describe("RPC compatibility fallback", () => {
       getAdminClients(),
       getAdminPingTasks(),
     ]);
-    await saveThemeSettings("LuminaPlus official", { compactShowTrafficTotal: true });
+    await saveThemeSettings("Aster official", { compactShowTrafficTotal: true });
 
     expect(me).toMatchObject({ logged_in: true, username: "admin", uuid: "owner" });
     expect(publicConfig).toMatchObject({
